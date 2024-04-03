@@ -16,6 +16,7 @@ func GetCF(db *badger.DB, cf string, key []byte) (val []byte, err error) {
 		val, err = GetCFFromTxn(txn, cf, key)
 		return err
 	})
+
 	return
 }
 
