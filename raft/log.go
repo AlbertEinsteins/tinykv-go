@@ -14,17 +14,23 @@
 
 package raft
 
-import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+import (
+	"fmt"
+	"sync"
+
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+)
 
 // RaftLog manage the log entries, its struct look like:
 //
-//  snapshot/first.....applied....committed....stabled.....last
-//  --------|------------------------------------------------|
-//                            log entries
+//	snapshot/first.....applied....committed....stabled.....last
+//	--------|------------------------------------------------|
+//	                          log entries
 //
 // for simplify the RaftLog implement should manage all log entries
 // that not truncated
 type RaftLog struct {
+	mu sync.Mutex
 	// storage contains all stable entries since the last snapshot.
 	storage Storage
 
@@ -56,7 +62,10 @@ type RaftLog struct {
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	return nil
+	log := &RaftLog{
+		storage: storage,
+	}
+	return log
 }
 
 // We need to compact the log entries in some point of time like
@@ -71,29 +80,89 @@ func (l *RaftLog) maybeCompact() {
 // note, this is one of the test stub functions you need to implement.
 func (l *RaftLog) allEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	start, _ := l.storage.FirstIndex()
+	end, _ := l.storage.LastIndex()
+
+	logs, err := l.storage.Entries(start, end)
+
+	if err != nil {
+		panic("read entries all from storage err")
+	}
+	return logs
 }
 
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if len(l.entries) == 0 {
+		return nil
+	}
+
+	lastIdx := l.entries[len(l.entries)-1].Index
+	offset := l.entries[0].Index
+	if l.stabled < lastIdx {
+		return l.entries[l.stabled+1-offset:]
+	}
 	return nil
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	return nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// get from storage
+	entries, err := l.storage.Entries(l.applied+1, l.committed)
+	if err != nil {
+		panic(fmt.Sprintf("read entries [applied-{%d},commited-{%d}] from storage err",
+			l.applied+1, l.committed))
+	}
+	return entries
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	return 0
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if len(l.entries) == 0 {
+		lastIdx, err := l.storage.LastIndex()
+		if err != nil {
+			{
+				panic("err read lastidx")
+			}
+		}
+		return lastIdx
+	}
+	return l.entries[len(l.entries)-1].Index
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	return 0, nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if i <= l.stabled {
+		return l.storage.Term(i)
+	}
+
+	// check entries
+	if len(l.entries) == 0 {
+		return 0, ErrUnavailable
+	}
+	offset := l.entries[0].Index
+	if int(i-offset) >= len(l.entries) {
+		return 0, ErrUnavailable
+	}
+
+	return l.entries[i-offset].Term, nil
 }

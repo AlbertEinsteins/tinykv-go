@@ -114,6 +114,7 @@ func (ms *MemoryStorage) Entries(lo, hi uint64) ([]pb.Entry, error) {
 	if lo <= offset {
 		return nil, ErrCompacted
 	}
+
 	if hi > ms.lastIndex()+1 {
 		log.Panicf("entries' hi(%d) is out of bound lastindex(%d)", hi, ms.lastIndex())
 	}

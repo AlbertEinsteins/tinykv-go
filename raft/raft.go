@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"sync"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -108,6 +109,7 @@ type Progress struct {
 }
 
 type Raft struct {
+	mu sync.Mutex
 	id uint64
 
 	Term uint64
@@ -157,6 +159,10 @@ type Raft struct {
 	// value.
 	// (Used in 3A conf change)
 	PendingConfIndex uint64
+
+	lastApplied uint64
+
+	peers []uint64
 }
 
 // newRaft return a raft peer with the given config
@@ -165,7 +171,18 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 	// Your Code Here (2A).
-	return nil
+	raft := &Raft{
+		id:               c.ID,
+		electionTimeout:  c.ElectionTick,
+		heartbeatTimeout: c.HeartbeatTick,
+		RaftLog:          newLog(c.Storage),
+		State:            StateFollower,
+		peers:            c.peers,
+	}
+
+	// init state
+
+	return raft
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
@@ -183,22 +200,69 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	// Your Code Here (2A).
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.State == StateLeader {
+		r.heartbeatElapsed++
+
+		if r.heartbeatElapsed >= r.heartbeatTimeout {
+			r.triggerHearbeat()
+		}
+		return // block election
+	}
+
+	r.electionElapsed++
+	if r.electionElapsed >= r.electionTimeout {
+		r.triggerElection()
+	}
+}
+
+func (r *Raft) triggerElection() {
+	Debug(dLog, "node-%d start to singal elect, election ets %v\n", r.id, r.electionElapsed)
+
+	electionStartMsg := pb.Message{
+		MsgType: pb.MessageType_MsgHup,
+		From:    r.id,
+		To:      r.id,
+	}
+	r.Step(electionStartMsg)
+}
+
+func (r *Raft) triggerHearbeat() {
+	Debug(dLog, "node-[%d] start to signal send heartbeat\n", r.id)
+	heartbeatStartMsg := pb.Message{
+		MsgType: pb.MessageType_MsgBeat,
+		From:    r.id,
+		To:      r.id,
+	}
+	r.Step(heartbeatStartMsg)
 }
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+	r.State = StateFollower
+	r.Term = term
+	r.Lead = lead
 }
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+	r.State = StateCandidate
+	r.Term++
+
+	r.electionElapsed = 0
 }
 
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
+	Debug(dLog, "node-[%d] turns to leader\n", r.id)
+	r.State = StateLeader
+	r.electionElapsed = 0
 }
 
 // Step the entrance of handle message, see `MessageType`
@@ -207,15 +271,205 @@ func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
+		r.handleMsgFollower(m)
 	case StateCandidate:
+		r.handleMsgCandicate(m)
 	case StateLeader:
+		r.handleMsgLeader(m)
 	}
 	return nil
+}
+
+func (r *Raft) initVotes() {
+	r.votes = make(map[uint64]bool)
+	for _, peerId := range r.peers {
+		r.votes[peerId] = false
+	}
+}
+
+func (r *Raft) handleMsgFollower(m pb.Message) {
+	if m.MsgType == pb.MessageType_MsgHup { // local msg
+		r.startElection()
+	} else if m.MsgType == pb.MessageType_MsgRequestVote { // remote msg
+		r.handleRequestVote(m)
+	} else if m.MsgType == pb.MessageType_MsgRequestVoteResponse {
+		r.handleRequestVoteResponse(m)
+	} else if m.MsgType == pb.MessageType_MsgAppend {
+		r.handleAppendEntries(m)
+	}
+}
+
+func (r *Raft) handleMsgLeader(m pb.Message) {
+	if m.MsgType == pb.MessageType_MsgRequestVote {
+		r.handleRequestVote(m)
+	} else if m.MsgType == pb.MessageType_MsgAppend {
+		r.handleAppendEntries(m)
+	} else if m.MsgType == pb.MessageType_MsgAppendResponse {
+		r.handleAppendEntriesResponse(m)
+	} else if m.MsgType == pb.MessageType_MsgBeat {
+		r.startHeartBeat()
+	}
+}
+
+func (r *Raft) handleMsgCandicate(m pb.Message) {
+	if m.MsgType == pb.MessageType_MsgHup { // local msg
+		r.startElection()
+	} else if m.MsgType == pb.MessageType_MsgRequestVote {
+		r.handleRequestVote(m)
+	} else if m.MsgType == pb.MessageType_MsgRequestVoteResponse {
+		r.handleRequestVoteResponse(m)
+	} else if m.MsgType == pb.MessageType_MsgHeartbeat {
+		r.handleHeartbeat(m)
+	} else if m.MsgType == pb.MessageType_MsgAppend {
+		r.handleAppendEntries(m)
+	}
+}
+
+func (r *Raft) startElection() {
+	Debug(dLog, "node-[%d] start to election in term {%d}", r.id, r.Term+1)
+	r.becomeCandidate()
+
+	r.initVotes()
+	r.votes[r.id] = true
+	r.Vote = r.id
+
+	latestCommitedIdx := r.RaftLog.committed
+	for _, peerId := range r.peers {
+		if peerId == r.id {
+			continue
+		}
+
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgRequestVote,
+			From:    r.id,
+			To:      peerId,
+			Term:    r.Term,
+			Commit:  latestCommitedIdx,
+		})
+	}
+}
+
+func (r *Raft) startHeartBeat() {
+	Debug(dLog, "node-[%d] start to send hearbeat in term {%d}", r.id, r.Term+1)
+
+	for _, peerId := range r.peers {
+		if peerId == r.id {
+			continue
+		}
+
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgHeartbeat,
+			From:    r.id,
+			To:      peerId,
+			Term:    r.Term,
+		})
+	}
+}
+
+// handle requestvote rpc request
+func (r *Raft) handleRequestVote(m pb.Message) {
+	Debug(dLog, "node-[%d] in state {%v} receive a vote request in term {%v} from node {%d}",
+		r.id, r.State.String(), m.Term, m.From)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if m.Term < r.Term {
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgRequestVoteResponse,
+			From:    r.id,
+			To:      m.From,
+			Reject:  true,
+			Term:    r.Term,
+		})
+		return
+	}
+
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, 0)
+		r.Vote = 0
+		r.Term = m.Term
+	}
+
+	if r.canVoteFor(m.Term, m.Commit) {
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgRequestVoteResponse,
+			From:    r.id,
+			To:      m.From,
+			Reject:  false,
+		})
+	}
+
+}
+
+func (r *Raft) canVoteFor(term, latestCommitedIndex uint64) bool {
+	if r.Vote != 0 {
+		return false
+	}
+	if r.Term > term || r.RaftLog.committed < latestCommitedIndex {
+		return false
+	}
+	return true
+}
+
+func (r *Raft) handleRequestVoteResponse(m pb.Message) {
+	Debug(dLog, "node-[%d] receive a vote response from [%d], is vote {%v}", r.id, m.From, !m.Reject)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if m.Term > r.Term { // receive higher term rpsponse
+		r.becomeFollower(m.Term, m.From)
+		return
+	}
+
+	if !m.Reject {
+		r.votes[m.From] = true
+
+		voteCount := 0
+		for _, isVote := range r.votes {
+			if isVote {
+				voteCount++
+			}
+		}
+		if voteCount > len(r.votes)/2 && r.State != StateLeader {
+			r.becomeLeader()
+		}
+	}
 }
 
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
+	Debug(dLog, "node-[%d] receive a append msg in term {%d}", r.id, m.Term)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if m.Term < r.Term {
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      m.From,
+			Term:    r.Term,
+		})
+		return
+	}
+
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, m.From)
+	}
+
+	//TODO: then decide whether need to append log
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MessageType_MsgAppendResponse,
+		From:    r.id,
+		To:      m.From,
+		Term:    r.Term,
+	})
+}
+
+func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
+	Debug(dLog, "node-[%d] in term {%d} receive a append response in term {%d}",
+		r.id, r.Term, m.Term)
 }
 
 // handleHeartbeat handle Heartbeat RPC request
