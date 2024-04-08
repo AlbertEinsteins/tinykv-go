@@ -235,6 +235,19 @@ func (r *Raft) triggerHearbeat() {
 	r.Step(heartbeatStartMsg)
 }
 
+func (r *Raft) initProgress() {
+	for _, peerId := range r.peers {
+		if peerId == r.id {
+			continue
+		}
+
+		r.Prs[peerId] = &Progress{
+			Next:  r.RaftLog.LastIndex(),
+			Match: 0,
+		}
+	}
+}
+
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
@@ -262,6 +275,8 @@ func (r *Raft) becomeLeader() {
 	Debug(dLog, "node-[%d] turns to leader\n", r.id)
 	r.State = StateLeader
 	r.electionElapsed = 0
+
+	r.initProgress()
 }
 
 // Step the entrance of handle message, see `MessageType`
@@ -307,6 +322,8 @@ func (r *Raft) handleMsgLeader(m pb.Message) {
 		r.handleAppendEntriesResponse(m)
 	} else if m.MsgType == pb.MessageType_MsgBeat {
 		r.startHeartBeat()
+	} else if m.MsgType == pb.MessageType_MsgPropose {
+		r.handlePropose(m)
 	}
 }
 
@@ -321,6 +338,22 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 		r.handleHeartbeat(m)
 	} else if m.MsgType == pb.MessageType_MsgAppend {
 		r.handleAppendEntries(m)
+	}
+}
+
+// ================ operation function ======================
+func (r *Raft) handlePropose(m pb.Message) {
+	Debug(dLog, "start to propose\n")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// save local
+	r.msgs = append(r.msgs, m)
+
+	// then replicate to other peer
+	for _, peerId := range r.peers {
+
 	}
 }
 
@@ -505,6 +538,8 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
+	Debug(dLog, "node-[%d] in term {%d} receive a hearbeat msg in term {%d}", r.id, r.Term, m.Term)
+
 }
 
 // handleSnapshot handle Snapshot RPC request

@@ -133,7 +133,7 @@ func (l *RaftLog) LastIndex() uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if len(l.entries) == 0 {
+	if len(l.entries) == 0 { // get from storage
 		lastIdx, err := l.storage.LastIndex()
 		if err != nil {
 			{
