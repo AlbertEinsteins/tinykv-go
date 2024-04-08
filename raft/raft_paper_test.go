@@ -900,6 +900,7 @@ func commitNoopEntry(r *Raft, s *MemoryStorage) {
 	}
 	// simulate the response of MessageType_MsgAppend
 	msgs := r.readMessages()
+	fmt.Println(msgs)
 	for _, m := range msgs {
 		if m.MsgType != pb.MessageType_MsgAppend || len(m.Entries) != 1 || m.Entries[0].Data != nil {
 			panic("not a message to append noop entry")
@@ -908,6 +909,7 @@ func commitNoopEntry(r *Raft, s *MemoryStorage) {
 	}
 	// ignore further messages to refresh followers' commit index
 	r.readMessages()
+	// fmt.Println(r.RaftLog.unstableEntries())
 	s.Append(r.RaftLog.unstableEntries())
 	r.RaftLog.applied = r.RaftLog.committed
 	r.RaftLog.stabled = r.RaftLog.LastIndex()
