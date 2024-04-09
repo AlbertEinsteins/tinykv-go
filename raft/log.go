@@ -108,14 +108,13 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-
 	// get from storage
-	entries, err := l.storage.Entries(l.applied+1, l.committed)
+	ents, err := l.storage.Entries(l.applied+1, l.committed)
 	if err != nil {
 		panic(fmt.Sprintf("read entries [applied-{%d},commited-{%d}] from storage err",
 			l.applied+1, l.committed))
 	}
-	return entries
+	return ents
 }
 
 // LastIndex return the last index of the log entries
@@ -137,7 +136,11 @@ func (l *RaftLog) LastIndex() uint64 {
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
 	if i <= l.stabled {
-		return l.storage.Term(i)
+		term, err := l.storage.Term(i)
+		if err != nil {
+			panic(err)
+		}
+		return term, nil
 	}
 
 	// check entries
@@ -158,7 +161,6 @@ func (l *RaftLog) LogRange(lo, hi uint64) []*pb.Entry {
 		panic(err)
 	}
 
-	fmt.Println(lo, lastLogIdx)
 	if lo > lastLogIdx { // means logs cur in memory if exists
 		if len(l.entries) == 0 {
 			return nil

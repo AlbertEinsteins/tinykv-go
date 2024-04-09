@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"sort"
 
@@ -430,12 +429,20 @@ func (r *Raft) sendAppend(to uint64) bool {
 
 	nextId := r.Prs[to].Next
 	entries := r.RaftLog.LogRange(nextId, nextId+1)
-	fmt.Println(entries)
+
+	prevLogIdx := nextId - 1
+	prevLogTerm, err := r.RaftLog.Term(prevLogIdx)
+	if err != nil {
+		panic(err)
+	}
+
 	msg := pb.Message{
 		MsgType: pb.MessageType_MsgAppend,
 		From:    r.id,
 		To:      to,
 		Term:    r.Term,
+		LogTerm: prevLogTerm,
+		Index:   prevLogIdx,
 		Entries: entries,
 		Commit:  r.RaftLog.committed,
 	}
