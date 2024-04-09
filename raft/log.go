@@ -15,8 +15,6 @@
 package raft
 
 import (
-	"fmt"
-
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -60,10 +58,32 @@ type RaftLog struct {
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	log := &RaftLog{
+	raftLog := &RaftLog{
 		storage: storage,
 	}
-	return log
+
+	// restore logs from storage
+	firstIndex, err := storage.FirstIndex()
+	if err != nil {
+		panic(err)
+	}
+	lastIndex, err := storage.LastIndex()
+	if err != nil {
+		panic(err)
+	}
+
+	// check if only exists the dummy log
+	if firstIndex > lastIndex {
+		return raftLog
+	}
+
+	diskLogs, err := storage.Entries(firstIndex, lastIndex+1)
+	if err != nil {
+		panic(err)
+	}
+	// fmt.Println(firstIndex, lastIndex, diskLogs)
+	raftLog.entries = append(raftLog.entries, diskLogs...)
+	return raftLog
 }
 
 // We need to compact the log entries in some point of time like
@@ -78,16 +98,7 @@ func (l *RaftLog) maybeCompact() {
 // note, this is one of the test stub functions you need to implement.
 func (l *RaftLog) allEntries() []pb.Entry {
 	// Your Code Here (2A).
-
-	start, _ := l.storage.FirstIndex()
-	end, _ := l.storage.LastIndex()
-
-	logs, err := l.storage.Entries(start, end)
-
-	if err != nil {
-		panic("read entries all from storage err")
-	}
-	return logs
+	return l.entries[:]
 }
 
 // unstableEntries return all the unstable entries
@@ -107,88 +118,64 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	// Your Code Here (2A).
-	// get from storage
-	ents, err := l.storage.Entries(l.applied+1, l.committed)
-	if err != nil {
-		panic(fmt.Sprintf("read entries [applied-{%d},commited-{%d}] from storage err",
-			l.applied+1, l.committed))
+	if len(l.entries) == 0 {
+		return nil
 	}
+
+	// Your Code Here (2A).
+	offset := l.entries[0].Index
+	start := l.applied - offset + 1
+	end := l.committed - offset
+	// fmt.Println(offset, start, end+1)
+	ents = append(ents, l.entries[start:end+1]...)
 	return ents
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
-	// Your Code Here (2A).
-	if len(l.entries) == 0 { // get from storage
-		lastIdx, err := l.storage.LastIndex()
-		if err != nil {
-			{
-				panic("err read lastidx")
-			}
-		}
-		return lastIdx
+	if len(l.entries) == 0 {
+		return 0
 	}
+	// Your Code Here (2A).
 	return l.entries[len(l.entries)-1].Index
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	if i <= l.stabled {
-		term, err := l.storage.Term(i)
-		if err != nil {
-			panic(err)
-		}
-		return term, nil
-	}
-
 	// check entries
-	if len(l.entries) == 0 {
-		return 0, ErrUnavailable
+	if i <= l.stabled {
+		return l.storage.Term(i)
 	}
-	offset := l.entries[0].Index
-	if int(i-offset) >= len(l.entries) {
+
+	// check if in mem log
+	if len(l.entries) == 0 ||
+		(i-l.entries[0].Index) >= uint64(len(l.entries)) {
 		return 0, ErrUnavailable
 	}
 
-	return l.entries[i-offset].Term, nil
+	return l.entries[i-l.entries[0].Index].Term, nil
 }
 
 func (l *RaftLog) LogRange(lo, hi uint64) []*pb.Entry {
-	lastLogIdx, err := l.storage.LastIndex()
-	if err != nil {
-		panic(err)
+	if len(l.entries) == 0 {
+		return nil
 	}
 
-	if lo > lastLogIdx { // means logs cur in memory if exists
-		if len(l.entries) == 0 {
-			return nil
-		}
-
-		offset := l.entries[0].Index
-		end := min(uint64(len(l.entries)), hi-offset)
-		logs := l.entries[lo-offset : end]
-		entries := make([]*pb.Entry, 0)
-		for _, log := range logs {
-			entries = append(entries, &log)
-		}
-		return entries
+	offset := l.entries[0].Index
+	if lo < offset || hi < offset {
+		return nil
 	}
 
-	logs, err := l.storage.Entries(lo, hi)
-	if err != nil {
-		panic(err)
+	rtnEntries := make([]*pb.Entry, 0)
+	end := min(hi-offset+1, uint64(len(l.entries)))
+	for _, ent := range l.entries[lo-offset : end] {
+		rtnEntries = append(rtnEntries, &ent)
 	}
-
-	entries := make([]*pb.Entry, len(logs))
-	for idx, log := range logs {
-		entries[idx] = &log
-	}
-	return entries
+	return rtnEntries
 }
 
-func (l *RaftLog) logAt(idx uint64) *pb.Entry {
+func (l *RaftLog) LogAt(idx uint64) *pb.Entry {
 	logs := l.LogRange(idx, idx+1)
 
 	if len(logs) == 0 {
@@ -196,4 +183,15 @@ func (l *RaftLog) logAt(idx uint64) *pb.Entry {
 	}
 
 	return logs[0]
+}
+
+// append
+func (l *RaftLog) AppendEntries(entries []pb.Entry) {
+	// apppend two places
+	if len(entries) == 0 {
+		return
+	}
+
+	lastIndex := entries[len(entries)-1].Index
+	l.storage.AppendEntries(entries)
 }

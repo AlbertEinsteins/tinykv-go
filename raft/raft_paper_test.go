@@ -910,7 +910,7 @@ func commitNoopEntry(r *Raft, s *MemoryStorage) {
 	}
 	// ignore further messages to refresh followers' commit index
 	r.readMessages()
-	fmt.Println(r.RaftLog.unstableEntries())
+	// fmt.Println(r.RaftLog.unstableEntries())
 	s.Append(r.RaftLog.unstableEntries())
 	r.RaftLog.applied = r.RaftLog.committed
 	r.RaftLog.stabled = r.RaftLog.LastIndex()

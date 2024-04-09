@@ -233,10 +233,6 @@ func (r *Raft) initProgress() {
 	r.Prs = make(map[uint64]*Progress)
 
 	for _, peerId := range r.peers {
-		if peerId == r.id {
-			continue
-		}
-
 		r.Prs[peerId] = &Progress{
 			Next:  r.RaftLog.LastIndex() + 1,
 			Match: 0,
@@ -359,6 +355,14 @@ func (r *Raft) handlePropose(m pb.Message) {
 		}
 
 		r.RaftLog.entries = append(r.RaftLog.entries, log)
+	}
+	// update local Process
+	r.Prs[r.id].Match = r.RaftLog.LastIndex()
+
+	// check if only exists one node
+	if len(r.peers) == 1 {
+		r.updateCommitIndex()
+		return
 	}
 
 	// then replicate to other peer
@@ -558,13 +562,59 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.becomeFollower(m.Term, m.From)
 	}
 
-	//TODO: then decide whether need to append log
+	prevLogIndex := m.LogTerm
+	prevLogTerm := m.Index
+	if r.conflictAt(prevLogIndex, prevLogTerm) {
+		// compute match index, rtn to leader
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      m.From,
+			Term:    r.Term,
+			Reject:  true,
+			Index:   0,
+		})
+		return
+	}
+
+	r.processEntries(&m)
+	r.commitFollower(m.Commit)
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
 		To:      m.From,
 		Term:    r.Term,
+		Index:   m.Index + uint64(len(m.Entries)),
 	})
+}
+
+func (r *Raft) processEntries(m *pb.Message) {
+	// entries := m.Entries
+	// TODO: append any new entries
+
+	for _, ent := range m.Entries {
+		r.RaftLog.entries = append(r.RaftLog.entries, *ent)
+	}
+}
+
+func (r *Raft) commitFollower(leaderCommited uint64) {
+	if leaderCommited > r.RaftLog.committed {
+		r.RaftLog.committed = min(leaderCommited, r.RaftLog.LastIndex())
+		Debug(dLog, "node-[%d] in follower commit index to {%d}", r.id, r.RaftLog.committed)
+	}
+}
+
+func (r *Raft) conflictAt(prevLogIdx, prevLogTerm uint64) bool {
+	if prevLogIdx > r.RaftLog.LastIndex() {
+		return true
+	}
+
+	term, err := r.RaftLog.Term(prevLogIdx)
+	if err != nil {
+		panic(err)
+	}
+
+	return term != prevLogTerm
 }
 
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
@@ -593,21 +643,21 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 }
 
 func (r *Raft) updateCommitIndex() {
-	matchCopy := make([]uint64, len(r.Prs))
-	for _, status := range r.Prs {
+	matchCopy := make([]uint64, 0)
+	for _, status := range r.Prs { // collect match index
 		matchCopy = append(matchCopy, status.Match)
 	}
-	matchCopy[r.id] = r.RaftLog.LastIndex()
 
+	// fmt.Println(matchCopy)
 	sort.Slice(matchCopy, func(i, j int) bool {
 		return matchCopy[i] < matchCopy[j]
 	})
 
 	N := matchCopy[len(matchCopy)/2]
 
-	if N > r.RaftLog.committed && r.RaftLog.logAt(N).Term == r.Term {
+	if N > r.RaftLog.committed && r.RaftLog.LogAt(N).Term == r.Term {
 		r.RaftLog.committed = max(r.RaftLog.committed, N)
-		Debug(dLog, "node-[%d] update current commit idx : %d", r.id, r.RaftLog.committed)
+		Debug(dLog, "node-[%d] after updated, current commit idx : %d", r.id, r.RaftLog.committed)
 	}
 }
 
