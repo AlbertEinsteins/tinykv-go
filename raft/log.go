@@ -27,7 +27,7 @@ import (
 // for simplify the RaftLog implement should manage all log entries
 // that not truncated
 type RaftLog struct {
-	// storage contains all stable entries since the last snapshot.
+	// storage contains all stable entries  since the last snapshot.
 	storage Storage
 
 	// committed is the highest log position that is known to be in
@@ -83,6 +83,7 @@ func newLog(storage Storage) *RaftLog {
 	}
 	// fmt.Println(firstIndex, lastIndex, diskLogs)
 	raftLog.entries = append(raftLog.entries, diskLogs...)
+	raftLog.stabled = lastIndex
 	return raftLog
 }
 
@@ -113,7 +114,7 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 	if l.stabled < lastIdx {
 		return l.entries[l.stabled+1-offset:]
 	}
-	return nil
+	return []pb.Entry{}
 }
 
 // nextEnts returns all the committed but not applied entries
@@ -124,7 +125,9 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 
 	// Your Code Here (2A).
 	offset := l.entries[0].Index
-	start := l.applied - offset + 1
+	// fmt.Println(l.entries, l.applied, l.committed, l.stabled)
+
+	start := l.applied + 1 - offset
 	end := l.committed - offset
 	// fmt.Println(offset, start, end+1)
 	ents = append(ents, l.entries[start:end+1]...)
@@ -138,6 +141,13 @@ func (l *RaftLog) LastIndex() uint64 {
 	}
 	// Your Code Here (2A).
 	return l.entries[len(l.entries)-1].Index
+}
+
+func (l *RaftLog) FirstIndex() uint64 {
+	if len(l.entries) == 0 {
+		return 0
+	}
+	return l.entries[0].Index
 }
 
 // Term return the term of the entry in the given index
@@ -168,7 +178,7 @@ func (l *RaftLog) LogRange(lo, hi uint64) []*pb.Entry {
 	}
 
 	rtnEntries := make([]*pb.Entry, 0)
-	end := min(hi-offset+1, uint64(len(l.entries)))
+	end := min(hi-offset, uint64(len(l.entries)))
 	for _, ent := range l.entries[lo-offset : end] {
 		rtnEntries = append(rtnEntries, &ent)
 	}
@@ -183,15 +193,4 @@ func (l *RaftLog) LogAt(idx uint64) *pb.Entry {
 	}
 
 	return logs[0]
-}
-
-// append
-func (l *RaftLog) AppendEntries(entries []pb.Entry) {
-	// apppend two places
-	if len(entries) == 0 {
-		return
-	}
-
-	lastIndex := entries[len(entries)-1].Index
-	l.storage.AppendEntries(entries)
 }

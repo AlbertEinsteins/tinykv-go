@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sort"
 
@@ -184,8 +185,13 @@ func newRaft(c *Config) *Raft {
 		peers:            c.peers,
 	}
 
-	// init state
-	raft.becomeFollower(0, 0)
+	// init state or restore
+	hardState, _, err := c.Storage.InitialState()
+	if err != nil {
+		panic(err)
+	}
+
+	raft.becomeFollower(hardState.Term, hardState.Vote)
 	return raft
 }
 
@@ -242,6 +248,7 @@ func (r *Raft) initProgress() {
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
+	Debug(dLog, "node-[%d] turns to follower with leader [%d] in term {%d}", r.id, lead, term)
 	// Your Code Here (2A).
 	r.State = StateFollower
 	r.Term = term
@@ -254,6 +261,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 	r.State = StateCandidate
+	fmt.Println(r.Term)
 	r.Term++
 
 	r.electionElapsed = 0
@@ -276,6 +284,12 @@ func (r *Raft) becomeLeader() {
 	noopEntry.Index = r.RaftLog.LastIndex() + 1
 
 	r.RaftLog.entries = append(r.RaftLog.entries, *noopEntry)
+	r.updateProcess(r.id, r.RaftLog.LastIndex())
+}
+
+func (r *Raft) updateProcess(peer, nextMatch uint64) {
+	r.Prs[peer].Match = max(r.Prs[peer].Match, nextMatch)
+	r.Prs[peer].Next = r.Prs[peer].Match + 1
 }
 
 // Step the entrance of handle message, see `MessageType`
@@ -346,18 +360,19 @@ func (r *Raft) handlePropose(m pb.Message) {
 
 	// save local
 	lastLogIdx := r.RaftLog.LastIndex()
-
+	proposeEntries := make([]pb.Entry, 0)
 	for idx, entry := range m.Entries {
 		log := pb.Entry{
 			Term:  r.Term,
 			Index: lastLogIdx + 1 + uint64(idx),
 			Data:  entry.Data,
 		}
-
-		r.RaftLog.entries = append(r.RaftLog.entries, log)
+		proposeEntries = append(proposeEntries, log)
 	}
+
 	// update local Process
-	r.Prs[r.id].Match = r.RaftLog.LastIndex()
+	r.appendLocally(proposeEntries)
+	r.updateProcess(r.id, r.RaftLog.LastIndex())
 
 	// check if only exists one node
 	if len(r.peers) == 1 {
@@ -372,6 +387,18 @@ func (r *Raft) handlePropose(m pb.Message) {
 		}
 		r.sendAppend(peerId)
 	}
+}
+
+// Save Proposed Entries to Local Storage
+// entries must be continues, and
+// Note, entry.Index must be continues with entries in the storage before
+func (r *Raft) appendLocally(entries []pb.Entry) {
+	if len(entries) == 0 {
+		return
+	}
+	r.RaftLog.entries = append(r.RaftLog.entries, entries...)
+	// r.RaftLog.storage.AppendEntries(r.RaftLog.unstableEntries())
+	// r.RaftLog.stabled = r.RaftLog.LastIndex()
 }
 
 func (r *Raft) startElection() {
@@ -397,6 +424,8 @@ func (r *Raft) startElection() {
 	}
 
 	latestCommitedIdx := r.RaftLog.committed
+	lastLogIndex := r.RaftLog.LastIndex()
+	lastLogTerm, _ := r.RaftLog.Term(lastLogIndex)
 	for _, peerId := range r.peers {
 		if peerId == r.id {
 			continue
@@ -407,6 +436,8 @@ func (r *Raft) startElection() {
 			From:    r.id,
 			To:      peerId,
 			Term:    r.Term,
+			LogTerm: lastLogTerm,
+			Index:   lastLogIndex,
 			Commit:  latestCommitedIdx,
 		})
 	}
@@ -432,7 +463,8 @@ func (r *Raft) sendAppend(to uint64) bool {
 		r.id, to, r.Term)
 
 	nextId := r.Prs[to].Next
-	entries := r.RaftLog.LogRange(nextId, nextId+1)
+
+	entries := r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)
 
 	prevLogIdx := nextId - 1
 	prevLogTerm, err := r.RaftLog.Term(prevLogIdx)
@@ -496,7 +528,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		r.Term = m.Term
 	}
 
-	isVote := r.canVoteFor(m.From, m.Term, m.Commit)
+	isVote := r.canVoteFor(m.From, m.LogTerm, m.Index)
 	if isVote {
 		r.Vote = m.From
 	}
@@ -510,14 +542,21 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 	})
 }
 
-func (r *Raft) canVoteFor(from, term, latestCommitedIndex uint64) bool {
+func (r *Raft) canVoteFor(from, lastLogTerm, lastLogIndex uint64) bool {
 	if r.Vote != 0 && r.Vote != from {
 		return false
 	}
-	if r.Term > term || r.RaftLog.committed < latestCommitedIndex {
-		return false
+
+	curLastLogIndex := r.RaftLog.LastIndex()
+	curLastLogTerm, _ := r.RaftLog.Term(curLastLogIndex)
+
+	Debug(dLog, "node-[%d] <%d,%d>, candidate <%d,%d>", r.id, curLastLogIndex, curLastLogTerm,
+		lastLogIndex, lastLogTerm)
+	if lastLogTerm > curLastLogTerm ||
+		(lastLogTerm == curLastLogTerm && lastLogIndex >= curLastLogIndex) {
+		return true
 	}
-	return true
+	return false
 }
 
 func (r *Raft) handleRequestVoteResponse(m pb.Message) {
@@ -592,9 +631,49 @@ func (r *Raft) processEntries(m *pb.Message) {
 	// entries := m.Entries
 	// TODO: append any new entries
 
+	// fmt.Printf("cur raftlog %+v\n", r.RaftLog.entries)
+	// fmt.Printf("%+v\n", m.Entries)
+
+	// lastIdx := r.RaftLog.LastIndex()
+	// ssents, err := r.RaftLog.storage.Entries(1, lastIdx+1)
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// fmt.Printf("cur storage %+v\n", ssents)
+
+	idx := 0
+	appendIdx := m.Index // get prevlogindex from msg
 	for _, ent := range m.Entries {
-		r.RaftLog.entries = append(r.RaftLog.entries, *ent)
+		appendIdx++
+		if appendIdx <= r.RaftLog.LastIndex() {
+			if r.conflictAt(appendIdx, ent.Term) {
+				// delete [appendIdx:]
+				Debug(dLog, "node-[%d] remove the entry after index {%d}", r.id, appendIdx)
+				r.removeConflictEntryAfter(appendIdx)
+				break
+			} else {
+				// exist same entry
+			}
+		} else {
+			break
+		}
+
+		idx++
 	}
+
+	if len(m.Entries) > 0 {
+		for _, ent := range m.Entries[idx:] {
+			r.RaftLog.entries = append(r.RaftLog.entries, *ent)
+		}
+	}
+}
+
+// Delete Conflict Entries after given index
+func (r *Raft) removeConflictEntryAfter(index uint64) {
+	startPos := r.RaftLog.FirstIndex()
+	r.RaftLog.stabled = min(r.RaftLog.stabled, index-1)
+	r.RaftLog.entries = r.RaftLog.entries[:index-startPos]
 }
 
 func (r *Raft) commitFollower(leaderCommited uint64) {
@@ -632,8 +711,7 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 
 	if !m.Reject {
 		// update r.Prs
-		r.Prs[m.From].Match = max(r.Prs[m.From].Match, m.Index)
-		r.Prs[m.From].Next = r.Prs[m.From].Match + 1
+		r.updateProcess(m.From, m.Index)
 		r.updateCommitIndex()
 	} else {
 		// conflict entry
@@ -650,13 +728,13 @@ func (r *Raft) updateCommitIndex() {
 
 	// fmt.Println(matchCopy)
 	sort.Slice(matchCopy, func(i, j int) bool {
-		return matchCopy[i] < matchCopy[j]
+		return matchCopy[i] > matchCopy[j]
 	})
 
 	N := matchCopy[len(matchCopy)/2]
 
 	if N > r.RaftLog.committed && r.RaftLog.LogAt(N).Term == r.Term {
-		r.RaftLog.committed = max(r.RaftLog.committed, N)
+		r.RaftLog.committed = N
 		Debug(dLog, "node-[%d] after updated, current commit idx : %d", r.id, r.RaftLog.committed)
 	}
 }

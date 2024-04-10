@@ -68,9 +68,6 @@ type Storage interface {
 	// so raft state machine could know that Storage needs some time to prepare
 	// snapshot and call Snapshot later.
 	Snapshot() (pb.Snapshot, error)
-
-	// Append new Entries
-	AppendEntries() error
 }
 
 // MemoryStorage implements the Storage interface backed by an
@@ -274,8 +271,4 @@ func (ms *MemoryStorage) Append(entries []pb.Entry) error {
 			ms.lastIndex(), entries[0].Index)
 	}
 	return nil
-}
-
-func (ms *MemoryStorage) AppendEntries(entries []pb.Entry) error {
-	return ms.Append(entries)
 }
