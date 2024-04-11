@@ -281,11 +281,19 @@ func (r *Raft) becomeLeader() {
 
 	r.RaftLog.entries = append(r.RaftLog.entries, *noopEntry)
 	r.initProgress(r.RaftLog.LastIndex())
+
+	for _, peer := range r.peers {
+		if peer == r.id {
+			r.updateProcess(r.id, r.RaftLog.LastIndex(), r.RaftLog.LastIndex()+1)
+		} else {
+			r.updateProcess(r.id, 0, r.RaftLog.LastIndex()+1)
+		}
+	}
 }
 
-func (r *Raft) updateProcess(peer, nextMatch uint64) {
+func (r *Raft) updateProcess(peer, nextMatch, nextNext uint64) {
 	r.Prs[peer].Match = max(r.Prs[peer].Match, nextMatch)
-	r.Prs[peer].Next = r.Prs[peer].Match + 1
+	r.Prs[peer].Next = nextNext
 }
 
 // Step the entrance of handle message, see `MessageType`
@@ -319,6 +327,8 @@ func (r *Raft) handleMsgFollower(m pb.Message) {
 		r.handleRequestVoteResponse(m)
 	} else if m.MsgType == pb.MessageType_MsgAppend {
 		r.handleAppendEntries(m)
+	} else if m.MsgType == pb.MessageType_MsgHeartbeat {
+		r.handleHeartbeat(m)
 	}
 }
 
@@ -329,10 +339,12 @@ func (r *Raft) handleMsgLeader(m pb.Message) {
 		r.handleAppendEntries(m)
 	} else if m.MsgType == pb.MessageType_MsgAppendResponse {
 		r.handleAppendEntriesResponse(m)
-	} else if m.MsgType == pb.MessageType_MsgBeat {
+	} else if m.MsgType == pb.MessageType_MsgBeat { // local
 		r.startHeartBeat()
-	} else if m.MsgType == pb.MessageType_MsgPropose {
+	} else if m.MsgType == pb.MessageType_MsgPropose { //local
 		r.handlePropose(m)
+	} else if m.MsgType == pb.MessageType_MsgHeartbeat {
+		r.handleHeartbeat(m)
 	}
 }
 
@@ -352,7 +364,7 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 
 // ================ operation function ======================
 func (r *Raft) handlePropose(m pb.Message) {
-	Debug(dLog, "start to propose")
+	Debug(dLog, "node-[%d] start to propose", r.id)
 
 	// save local
 	lastLogIdx := r.RaftLog.LastIndex()
@@ -368,7 +380,8 @@ func (r *Raft) handlePropose(m pb.Message) {
 
 	// update local Process
 	r.appendLocally(proposeEntries)
-	r.updateProcess(r.id, r.RaftLog.LastIndex())
+	// start send
+	r.updateProcess(r.id, r.RaftLog.LastIndex(), r.RaftLog.LastIndex()+1)
 
 	// check if only exists one node
 	if len(r.peers) == 1 {
@@ -447,7 +460,12 @@ func (r *Raft) startHeartBeat() {
 			continue
 		}
 
-		r.sendHeartbeat(peerId)
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgHeartbeat,
+			From:    r.id,
+			To:      peerId,
+			Commit:  r.RaftLog.committed,
+		})
 	}
 }
 
@@ -576,6 +594,7 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		}
 		if voteCount > len(r.votes)/2 && r.State != StateLeader {
 			r.becomeLeader()
+			// commit no-op entry
 			for _, peer := range r.peers {
 				if peer == r.id {
 					continue
@@ -616,6 +635,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	prevLogTerm := m.Index
 	if r.conflictAt(prevLogIndex, prevLogTerm) {
 		// compute match index, rtn to leader
+		// fmt.Println("conflict")
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgAppendResponse,
 			From:    r.id,
@@ -628,7 +648,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 
 	r.processEntries(&m)
-	r.commitFollower(m.Commit)
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
@@ -665,19 +684,23 @@ func (r *Raft) processEntries(m *pb.Message) {
 				break
 			} else {
 				// exist same entry
+				idx++
 			}
 		} else {
 			break
 		}
-
-		idx++
 	}
 
+	lastNewEntIdx := m.Index
 	if len(m.Entries) > 0 {
 		for _, ent := range m.Entries[idx:] {
 			r.RaftLog.entries = append(r.RaftLog.entries, *ent)
 		}
+
+		lastNewEntIdx = m.Entries[len(m.Entries)-1].Index
 	}
+
+	r.commitFollower(m.Commit, lastNewEntIdx)
 }
 
 // Delete Conflict Entries after given index
@@ -687,10 +710,10 @@ func (r *Raft) removeConflictEntryAfter(index uint64) {
 	r.RaftLog.entries = r.RaftLog.entries[:index-startPos]
 }
 
-func (r *Raft) commitFollower(leaderCommited uint64) {
+func (r *Raft) commitFollower(leaderCommited, lastNewEntIdx uint64) {
 	if leaderCommited > r.RaftLog.committed {
-		r.RaftLog.committed = min(leaderCommited, r.RaftLog.LastIndex())
-		Debug(dLog, "node-[%d] in follower commit index to {%d}", r.id, r.RaftLog.committed)
+		r.RaftLog.committed = min(leaderCommited, lastNewEntIdx)
+		Debug(dLog, "node-[%d] in follower state commit index to {%d}", r.id, r.RaftLog.committed)
 	}
 }
 
@@ -722,7 +745,8 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 
 	if !m.Reject {
 		// update r.Prs
-		r.updateProcess(m.From, m.Index)
+		matchIdx := max(r.Prs[m.From].Match, m.Index)
+		r.updateProcess(m.From, matchIdx, matchIdx+1)
 		r.updateCommitIndex()
 	} else {
 		// conflict entry, retry
@@ -739,24 +763,53 @@ func (r *Raft) updateCommitIndex() {
 		matchCopy = append(matchCopy, status.Match)
 	}
 
-	// fmt.Println(matchCopy)
 	sort.Slice(matchCopy, func(i, j int) bool {
 		return matchCopy[i] > matchCopy[j]
 	})
 
+	// fmt.Println(matchCopy)
 	N := matchCopy[len(matchCopy)/2]
 
 	if N > r.RaftLog.committed && r.RaftLog.LogAt(N).Term == r.Term {
 		r.RaftLog.committed = N
 		Debug(dLog, "node-[%d] after updated, current commit idx : %d", r.id, r.RaftLog.committed)
+
+		// update follower commit idx
+		for _, peer := range r.peers {
+			if peer == r.id {
+				continue
+			}
+			r.sendAppend(peer)
+		}
 	}
 }
 
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
-	Debug(dLog, "node-[%d] in term {%d} receive a hearbeat msg in term {%d}", r.id, r.Term, m.Term)
+	Debug(dLog, "node-[%d] in term {%d} receive a hearbeat msg in term {%d}, leader commit {%d}, cur logs {%d}",
+		r.id, r.Term, m.Term, m.Commit, r.RaftLog.allEntries())
+	if m.Term < r.Term {
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      m.From,
+			Term:    r.Term,
+		})
+		return
+	}
 
+	if m.Term >= r.Term {
+		r.becomeFollower(m.Term, m.From)
+	}
+
+	r.commitFollower(m.Commit, r.RaftLog.LastIndex())
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeatResponse,
+		From:    r.id,
+		To:      m.From,
+		Term:    r.Term,
+	})
 }
 
 // handleSnapshot handle Snapshot RPC request

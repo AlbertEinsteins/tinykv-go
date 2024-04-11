@@ -368,6 +368,7 @@ func TestCommitWithHeartbeat2AB(t *testing.T) {
 	}
 
 	// network recovery
+	fmt.Println("network recovery")
 	tt.recover()
 
 	// leader broadcast heartbeat
@@ -598,6 +599,7 @@ func TestHandleMessageType_MsgAppend2AB(t *testing.T) {
 		sm.becomeFollower(2, None)
 
 		sm.handleAppendEntries(tt.m)
+
 		if sm.RaftLog.LastIndex() != tt.wIndex {
 			t.Errorf("#%d: lastIndex = %d, want %d", i, sm.RaftLog.LastIndex(), tt.wIndex)
 		}
@@ -929,6 +931,7 @@ func TestHeartbeatUpdateCommit2AB(t *testing.T) {
 		for i := 0; i < tt.successCnt; i++ {
 			nt.send(pb.Message{From: 2, To: 2, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
 		}
+
 		wCommit := uint64(2 + tt.successCnt) // 2 elctions
 		if sm2.RaftLog.committed != wCommit {
 			t.Fatalf("#%d: expected sm2 commit: %d, got: %d", i, wCommit, sm2.RaftLog.committed)
@@ -1549,7 +1552,6 @@ func entsWithConfig(configFunc func(*Config), id uint64, terms ...uint64) *Raft 
 	for i, term := range terms {
 		storage.Append([]pb.Entry{{Index: uint64(i + 1), Term: term}})
 	}
-	fmt.Println(storage.ents)
 	cfg := newTestConfig(id, []uint64{}, 5, 1, storage)
 	if configFunc != nil {
 		configFunc(cfg)
