@@ -1549,6 +1549,7 @@ func entsWithConfig(configFunc func(*Config), id uint64, terms ...uint64) *Raft 
 	for i, term := range terms {
 		storage.Append([]pb.Entry{{Index: uint64(i + 1), Term: term}})
 	}
+	fmt.Println(storage.ents)
 	cfg := newTestConfig(id, []uint64{}, 5, 1, storage)
 	if configFunc != nil {
 		configFunc(cfg)

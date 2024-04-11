@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"sort"
 
@@ -235,12 +234,12 @@ func (r *Raft) triggerHearbeat() {
 	r.Step(heartbeatStartMsg)
 }
 
-func (r *Raft) initProgress() {
+func (r *Raft) initProgress(nextIndex uint64) {
 	r.Prs = make(map[uint64]*Progress)
 
 	for _, peerId := range r.peers {
 		r.Prs[peerId] = &Progress{
-			Next:  r.RaftLog.LastIndex() + 1,
+			Next:  nextIndex,
 			Match: 0,
 		}
 	}
@@ -261,7 +260,6 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 	r.State = StateCandidate
-	fmt.Println(r.Term)
 	r.Term++
 
 	r.electionElapsed = 0
@@ -276,15 +274,13 @@ func (r *Raft) becomeLeader() {
 	r.State = StateLeader
 	r.electionElapsed = 0
 
-	r.initProgress()
-
 	// append no-op entry
 	noopEntry := r.noOpEntry()
 	noopEntry.Term = r.Term
 	noopEntry.Index = r.RaftLog.LastIndex() + 1
 
 	r.RaftLog.entries = append(r.RaftLog.entries, *noopEntry)
-	r.updateProcess(r.id, r.RaftLog.LastIndex())
+	r.initProgress(r.RaftLog.LastIndex())
 }
 
 func (r *Raft) updateProcess(peer, nextMatch uint64) {
@@ -463,7 +459,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 		r.id, to, r.Term)
 
 	nextId := r.Prs[to].Next
-
 	entries := r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)
 
 	prevLogIdx := nextId - 1
@@ -561,9 +556,12 @@ func (r *Raft) canVoteFor(from, lastLogTerm, lastLogIndex uint64) bool {
 
 func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 	Debug(dLog, "node-[%d] receive a vote response from [%d], is vote {%v}", r.id, m.From, !m.Reject)
+	if m.Term < r.Term { // old term request, ignore
+		return
+	}
 
-	if m.Term > r.Term { // receive higher term rpsponse
-		r.becomeFollower(m.Term, m.From)
+	if m.Term > r.Term { // receive higher term response, turn to follower
+		r.becomeFollower(m.Term, 0)
 		return
 	}
 
@@ -578,14 +576,27 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		}
 		if voteCount > len(r.votes)/2 && r.State != StateLeader {
 			r.becomeLeader()
+			for _, peer := range r.peers {
+				if peer == r.id {
+					continue
+				}
+
+				r.sendAppend(peer)
+			}
 		}
+		return
 	}
+
+	// if r.State != StateLeader { // if reject, and in this term is not leader
+	// 	r.becomeFollower(r.Term, 0)
+	// }
 }
 
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
-	Debug(dLog, "node-[%d] in term {%d} receive a append msg in term {%d} from node-[%d]", r.id, r.Term, m.Term, m.From)
+	Debug(dLog, "node-[%d] in term {%d} receive a append msg in term {%d} from node-[%d], data %v, prevlog,prevterm <%d, %d>",
+		r.id, r.Term, m.Term, m.From, m.Entries, m.Index, m.LogTerm)
 
 	if m.Term < r.Term {
 		r.msgs = append(r.msgs, pb.Message{
@@ -714,7 +725,9 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		r.updateProcess(m.From, m.Index)
 		r.updateCommitIndex()
 	} else {
-		// conflict entry
+		// conflict entry, retry
+		r.Prs[m.From].Next--
+		r.sendAppend(m.From)
 		Debug(dLog, "node-[%d] in leader state receive a conflict append response", r.id)
 	}
 

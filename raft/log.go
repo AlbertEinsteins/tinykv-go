@@ -179,8 +179,10 @@ func (l *RaftLog) LogRange(lo, hi uint64) []*pb.Entry {
 
 	rtnEntries := make([]*pb.Entry, 0)
 	end := min(hi-offset, uint64(len(l.entries)))
-	for _, ent := range l.entries[lo-offset : end] {
-		rtnEntries = append(rtnEntries, &ent)
+	// fmt.Println(l.entries[lo-offset : end])
+	selected := l.entries[lo-offset : end]
+	for idx := 0; idx < len(selected); idx++ {
+		rtnEntries = append(rtnEntries, &selected[idx])
 	}
 	return rtnEntries
 }
