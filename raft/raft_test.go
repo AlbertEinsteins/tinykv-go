@@ -368,9 +368,9 @@ func TestCommitWithHeartbeat2AB(t *testing.T) {
 	}
 
 	// network recovery
-	fmt.Println("network recovery")
 	tt.recover()
 
+	fmt.Println("recover")
 	// leader broadcast heartbeat
 	tt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgBeat})
 
@@ -403,7 +403,6 @@ func TestDuelingCandidates2AB(t *testing.T) {
 	}
 
 	nt.recover()
-
 	// candidate 3 now increases its term and tries to vote again
 	// we expect it to disrupt the leader 1 since it has a higher term
 	// 3 will be follower again since both 1 and 2 rejects its vote request since 3 does not have a long enough log
@@ -926,6 +925,7 @@ func TestHeartbeatUpdateCommit2AB(t *testing.T) {
 		if sm1.RaftLog.committed > 1 {
 			t.Fatalf("#%d: unexpected commit: %d", i, sm1.RaftLog.committed)
 		}
+
 		// propose log to cluster should success
 		nt.send(pb.Message{From: 2, To: 2, MsgType: pb.MessageType_MsgHup})
 		for i := 0; i < tt.successCnt; i++ {

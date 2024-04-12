@@ -313,9 +313,6 @@ func (r *Raft) Step(m pb.Message) error {
 
 func (r *Raft) initVotes() {
 	r.votes = make(map[uint64]bool)
-	for _, peerId := range r.peers {
-		r.votes[peerId] = false
-	}
 }
 
 func (r *Raft) handleMsgFollower(m pb.Message) {
@@ -345,6 +342,8 @@ func (r *Raft) handleMsgLeader(m pb.Message) {
 		r.handlePropose(m)
 	} else if m.MsgType == pb.MessageType_MsgHeartbeat {
 		r.handleHeartbeat(m)
+	} else if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
+		r.handleHeartBeatResponse(m)
 	}
 }
 
@@ -460,12 +459,7 @@ func (r *Raft) startHeartBeat() {
 			continue
 		}
 
-		r.msgs = append(r.msgs, pb.Message{
-			MsgType: pb.MessageType_MsgHeartbeat,
-			From:    r.id,
-			To:      peerId,
-			Commit:  r.RaftLog.committed,
-		})
+		r.sendHeartbeat(peerId)
 	}
 }
 
@@ -476,8 +470,17 @@ func (r *Raft) sendAppend(to uint64) bool {
 	Debug(dLog, "node-[%d] start to send ae to node-{%d} in term {%d}",
 		r.id, to, r.Term)
 
+	r.send(to, pb.MessageType_MsgAppend)
+	return true
+}
+
+func (r *Raft) send(to uint64, msgType pb.MessageType) {
 	nextId := r.Prs[to].Next
-	entries := r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)
+
+	entries := make([]*pb.Entry, 0)
+	if msgType != pb.MessageType_MsgHeartbeat {
+		entries = append(entries, r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)...)
+	}
 
 	prevLogIdx := nextId - 1
 	prevLogTerm, err := r.RaftLog.Term(prevLogIdx)
@@ -486,7 +489,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 	}
 
 	msg := pb.Message{
-		MsgType: pb.MessageType_MsgAppend,
+		MsgType: msgType,
 		From:    r.id,
 		To:      to,
 		Term:    r.Term,
@@ -496,7 +499,6 @@ func (r *Raft) sendAppend(to uint64) bool {
 		Commit:  r.RaftLog.committed,
 	}
 	r.msgs = append(r.msgs, msg)
-	return true
 }
 
 func (r *Raft) noOpEntry() *pb.Entry {
@@ -510,13 +512,7 @@ func (r *Raft) noOpEntry() *pb.Entry {
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
-
-	r.msgs = append(r.msgs, pb.Message{
-		MsgType: pb.MessageType_MsgHeartbeat,
-		From:    r.id,
-		To:      to,
-		Term:    r.Term,
-	})
+	r.send(to, pb.MessageType_MsgHeartbeat)
 }
 
 // handle requestvote rpc request
@@ -592,7 +588,7 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 				voteCount++
 			}
 		}
-		if voteCount > len(r.votes)/2 && r.State != StateLeader {
+		if voteCount > len(r.peers)/2 && r.State != StateLeader {
 			r.becomeLeader()
 			// commit no-op entry
 			for _, peer := range r.peers {
@@ -606,9 +602,19 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 		return
 	}
 
-	// if r.State != StateLeader { // if reject, and in this term is not leader
-	// 	r.becomeFollower(r.Term, 0)
-	// }
+	r.votes[m.From] = false
+
+	// check votes, if a majority reject, from candidate turn to follower
+	rejectCnt := 0
+	for _, isVote := range r.votes {
+		if !isVote {
+			rejectCnt++
+		}
+	}
+
+	if rejectCnt > len(r.peers)/2 {
+		r.becomeFollower(m.Term, 0)
+	}
 }
 
 // handleAppendEntries handle AppendEntries RPC request
@@ -752,7 +758,7 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		// conflict entry, retry
 		r.Prs[m.From].Next--
 		r.sendAppend(m.From)
-		Debug(dLog, "node-[%d] in leader state receive a conflict append response", r.id)
+		Debug(dLog, "node-[%d] in leader state receive a conflict append response from node-{%d}", r.id, m.From)
 	}
 
 }
@@ -787,8 +793,8 @@ func (r *Raft) updateCommitIndex() {
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
-	Debug(dLog, "node-[%d] in term {%d} receive a hearbeat msg in term {%d}, leader commit {%d}, cur logs {%d}",
-		r.id, r.Term, m.Term, m.Commit, r.RaftLog.allEntries())
+	Debug(dLog, "node-[%d] in term {%d} receive a hearbeat msg in term {%d}, leader commit {%d}, cur logs {%d}, request %v",
+		r.id, r.Term, m.Term, m.Commit, r.RaftLog.allEntries(), m)
 	if m.Term < r.Term {
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgAppendResponse,
@@ -803,13 +809,56 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		r.becomeFollower(m.Term, m.From)
 	}
 
-	r.commitFollower(m.Commit, r.RaftLog.LastIndex())
+	prevLogIndex := m.LogTerm
+	prevLogTerm := m.Index
+	if r.conflictAt(prevLogIndex, prevLogTerm) {
+		// compute match index, rtn to leader
+		// fmt.Println("conflict")
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgHeartbeatResponse,
+			From:    r.id,
+			To:      m.From,
+			Term:    r.Term,
+			Reject:  true,
+			Index:   0,
+		})
+		return
+	}
+
+	r.processEntries(&m)
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeatResponse,
 		From:    r.id,
 		To:      m.From,
 		Term:    r.Term,
+		Index:   m.Index + uint64(len(m.Entries)),
+		Commit:  r.RaftLog.committed,
 	})
+}
+
+func (r *Raft) handleHeartBeatResponse(m pb.Message) {
+	Debug(dLog, "node-[%d] receive a heartbeat response from node-[%d] in term {%d}", r.id, m.From, m.Term)
+	if m.Term < r.Term {
+		return
+	}
+
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, m.From)
+		return
+	}
+
+	if !m.Reject {
+		// update r.Prs
+		matchIdx := max(r.Prs[m.From].Match, m.Index)
+		r.updateProcess(m.From, matchIdx, matchIdx+1)
+		r.updateCommitIndex()
+
+		// if follower's log is too short, need to replicate
+
+		if r.RaftLog.committed > m.Commit {
+			r.sendAppend(m.From)
+		}
+	}
 }
 
 // handleSnapshot handle Snapshot RPC request
