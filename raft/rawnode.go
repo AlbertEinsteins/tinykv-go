@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"sync"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -27,7 +28,7 @@ var ErrStepLocalMsg = errors.New("raft: cannot step raft local message")
 // but there is no peer found in raft.Prs for that node.
 var ErrStepPeerNotFound = errors.New("raft: cannot step as peer not found")
 
-// SoftState provides state that is volatile and does not need to be persisted to the WAL.
+// SoftState provides state that is volatile and does not need to be persisted to the  .
 type SoftState struct {
 	Lead      uint64
 	RaftState StateType
@@ -70,12 +71,21 @@ type Ready struct {
 type RawNode struct {
 	Raft *Raft
 	// Your Data Here (2A).
+	mu           sync.Mutex
+	waitCond     *sync.Cond
+	readyPending bool
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
 func NewRawNode(config *Config) (*RawNode, error) {
 	// Your Code Here (2A).
-	return nil, nil
+	rawNode := &RawNode{
+		Raft: newRaft(config),
+	}
+
+	rawNode.waitCond = sync.NewCond(&rawNode.mu)
+	rawNode.readyPending = false
+	return rawNode, nil
 }
 
 // Tick advances the internal logical clock by a single tick.
@@ -142,20 +152,56 @@ func (rn *RawNode) Step(m pb.Message) error {
 
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
+	rn.mu.Lock()
+	defer rn.mu.Lock()
+
+	for rn.HasReady() { // wait last pending
+		rn.waitCond.Wait()
+	}
+
 	// Your Code Here (2A).
-	return Ready{}
+	unstableEntries := rn.Raft.RaftLog.unstableEntries()
+	commitedEntries := rn.Raft.RaftLog.nextEnts()
+	sendMsgs := rn.readMessages()
+
+	ready := Ready{
+		SoftState: &SoftState{
+			Lead:      rn.Raft.Lead,
+			RaftState: rn.Raft.State,
+		},
+		HardState: pb.HardState{
+			Term:   rn.Raft.Term,
+			Vote:   rn.Raft.Vote,
+			Commit: rn.Raft.RaftLog.committed,
+		},
+		Entries:          unstableEntries,
+		CommittedEntries: commitedEntries,
+		Messages:         sendMsgs,
+	}
+	return ready
+}
+
+func (rn *RawNode) readMessages() []pb.Message {
+	msgs := rn.Raft.msgs
+	rn.Raft.msgs = make([]pb.Message, 0)
+
+	return msgs
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
-	return false
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+
+	return rn.readyPending
 }
 
 // Advance notifies the RawNode that the application has applied and saved progress in the
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
+
 }
 
 // GetProgress return the Progress of this node and its peers, if this

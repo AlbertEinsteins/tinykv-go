@@ -191,6 +191,7 @@ func newRaft(c *Config) *Raft {
 	}
 
 	raft.becomeFollower(hardState.Term, hardState.Vote)
+	raft.initProgress(raft.RaftLog.LastIndex() + 1)
 	return raft
 }
 
@@ -480,6 +481,8 @@ func (r *Raft) send(to uint64, msgType pb.MessageType) {
 	entries := make([]*pb.Entry, 0)
 	if msgType != pb.MessageType_MsgHeartbeat {
 		entries = append(entries, r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)...)
+	} else {
+		entries = nil // must be nil, could not be a empty slice
 	}
 
 	prevLogIdx := nextId - 1
