@@ -170,6 +170,7 @@ func TestRawNodeStart2AC(t *testing.T) {
 
 	rawNode.Propose([]byte("foo"))
 	rd = rawNode.Ready()
+	// fmt.Println(rd.Entries, rawNode.Raft.RaftLog.committed, rawNode.Raft.RaftLog.applied)
 	if el := len(rd.Entries); el != len(rd.CommittedEntries) || el != 1 {
 		t.Errorf("got len(Entries): %+v, len(CommittedEntries): %+v, want %+v", el, len(rd.CommittedEntries), 1)
 	}

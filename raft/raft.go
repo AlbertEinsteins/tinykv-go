@@ -100,10 +100,6 @@ func (c *Config) validate() error {
 		return errors.New("storage cannot be nil")
 	}
 
-	if len(c.peers) == 0 {
-		return errors.New("peers must be a positive number")
-	}
-
 	return nil
 }
 
@@ -191,6 +187,8 @@ func newRaft(c *Config) *Raft {
 	}
 
 	raft.becomeFollower(hardState.Term, hardState.Vote)
+	raft.RaftLog.committed = hardState.Commit
+
 	raft.initProgress(raft.RaftLog.LastIndex() + 1)
 	return raft
 }
@@ -428,6 +426,8 @@ func (r *Raft) startElection() {
 		}
 		if voteCount > len(r.votes)/2 && r.State != StateLeader {
 			r.becomeLeader()
+			// commit log entry
+			r.updateCommitIndex()
 		}
 		return
 	}
