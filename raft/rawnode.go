@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
