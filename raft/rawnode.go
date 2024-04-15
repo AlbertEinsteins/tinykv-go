@@ -16,8 +16,6 @@ package raft
 
 import (
 	"errors"
-	"reflect"
-	"sync"
 	"sync/atomic"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
@@ -73,8 +71,6 @@ type Ready struct {
 type RawNode struct {
 	Raft *Raft
 	// Your Data Here (2A).
-	mu           sync.Mutex
-	waitCond     *sync.Cond
 	readyPending int32
 
 	lastSoftState *SoftState
@@ -88,7 +84,6 @@ func NewRawNode(config *Config) (*RawNode, error) {
 		Raft: newRaft(config),
 	}
 
-	rawNode.waitCond = sync.NewCond(&rawNode.mu)
 	atomic.StoreInt32(&rawNode.readyPending, 0)
 	return rawNode, nil
 }
@@ -157,13 +152,11 @@ func (rn *RawNode) Step(m pb.Message) error {
 
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
-	rn.mu.Lock()
-	defer rn.mu.Unlock()
-
-	for rn.HasReady() { // wait last pending
-		rn.waitCond.Wait()
+	if rn.HasReady() {
+		return rn.Ready()
 	}
 
+	// fmt.Println("xxx")
 	// Your Code Here (2A).
 	unstableEntries := rn.Raft.RaftLog.unstableEntries()
 	commitedEntries := rn.Raft.RaftLog.nextEnts()
@@ -186,12 +179,12 @@ func (rn *RawNode) Ready() Ready {
 		Messages:         sendMsgs,
 	}
 
-	if rn.lastSoftState != nil && !reflect.DeepEqual(curSoftState, rn.lastSoftState) {
+	if rn.lastSoftState != nil && !IsSoftStateEqual(curSoftState, rn.lastSoftState) {
 		ready.SoftState = curSoftState
 		rn.lastSoftState = curSoftState
 	}
 
-	if !reflect.DeepEqual(rn.lastHardState, pb.HardState{}) && !reflect.DeepEqual(curPdState, rn.lastHardState) {
+	if !IsEmptyHardState(rn.lastHardState) && !isHardStateEqual(curPdState, rn.lastHardState) {
 		ready.HardState = curPdState
 		rn.lastHardState = curPdState
 	}
@@ -218,11 +211,9 @@ func (rn *RawNode) HasReady() bool {
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
 	// update state
-	rn.mu.Lock()
-	defer rn.mu.Unlock()
 
-	for !rn.HasReady() { // wait a ready
-		rn.waitCond.Wait()
+	if !rn.HasReady() { // wait a ready
+		return
 	}
 	// fmt.Println(rd.Commit, rd.CommittedEntries)
 	rn.Raft.RaftLog.applied += uint64(len(rd.CommittedEntries))

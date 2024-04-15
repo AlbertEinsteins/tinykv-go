@@ -5,11 +5,15 @@ import (
 	"time"
 
 	"github.com/Connor1996/badger/y"
+	"github.com/golang/protobuf/proto"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/message"
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/meta"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/runner"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/snap"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
+	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/log"
+	"github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
@@ -43,6 +47,116 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		return
 	}
 	// Your Code Here (2B).
+	if !d.RaftGroup.HasReady() {
+		return
+	}
+
+	ready := d.RaftGroup.Ready()
+
+	// Save Locally, And Send
+	_, err := d.peer.peerStorage.SaveReadyState(&ready)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	d.peer.Send(d.ctx.trans, ready.Messages)
+
+	// apply commited entries
+	if len(ready.CommittedEntries) > 0 {
+		writeBatch := engine_util.WriteBatch{}
+
+		for _, commitedEntry := range ready.CommittedEntries {
+			if d.stopped {
+				return
+			}
+
+			// apply get, and collect put/delete op
+			d.appplyOrCollect(&writeBatch, commitedEntry)
+		}
+
+		// save to state machine
+
+		// 1. set/update meta
+		d.peerStorage.applyState.AppliedIndex += uint64(len(ready.CommittedEntries))
+		if err = writeBatch.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState); err != nil {
+			log.Panic(err)
+		}
+
+		// 2.write
+		writeBatch.MustWriteToDB(d.ctx.engine.Kv)
+	}
+
+	d.RaftGroup.Advance(ready)
+}
+
+func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb.Entry) {
+	cmdReq := raft_cmdpb.RaftCmdRequest{}
+
+	err := proto.Unmarshal(ent.Data, &cmdReq)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	// check valid
+	logIndex, term := ent.Index, ent.Term
+	firstProposal := d.proposals[0]
+	fmt.Println("receive a ", firstProposal.index, logIndex)
+
+	if firstProposal.index != logIndex || firstProposal.term != term {
+		firstProposal.cb.Done(ErrRespStaleCommand(firstProposal.term))
+		return
+	}
+
+	resp := raft_cmdpb.RaftCmdResponse{}
+
+	//exec every cmd
+	for _, clientReq := range cmdReq.Requests {
+		clientResp := raft_cmdpb.Response{}
+
+		switch clientReq.CmdType {
+		case raft_cmdpb.CmdType_Get:
+			getReq := clientReq.Get
+			getResp := raft_cmdpb.GetResponse{}
+
+			val, err := engine_util.GetCF(d.ctx.engine.Kv, getReq.Cf, getReq.Key)
+			if err != nil {
+				log.Panic(err)
+			}
+			getResp.Value = val
+
+			clientResp.CmdType = raft_cmdpb.CmdType_Get
+			clientResp.Get = &getResp
+
+		case raft_cmdpb.CmdType_Put:
+			putReq := clientReq.Put
+			putResp := raft_cmdpb.PutResponse{}
+
+			clientResp.CmdType = raft_cmdpb.CmdType_Put
+			clientResp.Put = &putResp
+
+			// append to writebacth
+			wb.SetCF(putReq.Cf, putReq.Key, putReq.Value)
+
+		case raft_cmdpb.CmdType_Delete:
+			delReq := clientReq.Delete
+			delResp := raft_cmdpb.DeleteResponse{}
+
+			clientResp.CmdType = raft_cmdpb.CmdType_Delete
+			clientResp.Delete = &delResp
+
+			// set val to nil, to delete key
+			wb.SetCF(delReq.Cf, delReq.Key, nil)
+		}
+
+		resp.Responses = append(resp.Responses, &clientResp)
+	}
+
+	// notify callback
+	resp.Header = &raft_cmdpb.RaftResponseHeader{
+		CurrentTerm: term,
+	}
+
+	firstProposal.cb.Done(&resp)
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
@@ -114,16 +228,17 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
-
+	fmt.Println("xxxxx")
 	if msg.Requests != nil {
 		d.propocessClientMsg(msg, cb)
-	} else {
+	} else { // handle admin requests
 		log.Infof("store-[%d], peer-[%d], receive a empty request msg", d.storeID(), d.PeerId())
 	}
 }
 
 func (d *peerMsgHandler) propocessClientMsg(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
-	// log.Info("xxx")
+	log.Info("xxx")
+
 	d.proposals = append(d.proposals, &proposal{
 		index: d.RaftGroup.Raft.RaftLog.LastIndex() + 1,
 		term:  d.RaftGroup.Raft.Term,
