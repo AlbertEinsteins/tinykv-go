@@ -114,6 +114,31 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
+
+	if msg.Requests != nil {
+		d.propocessClientMsg(msg, cb)
+	} else {
+		log.Infof("store-[%d], peer-[%d], receive a empty request msg", d.storeID(), d.PeerId())
+	}
+}
+
+func (d *peerMsgHandler) propocessClientMsg(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
+	// log.Info("xxx")
+	d.proposals = append(d.proposals, &proposal{
+		index: d.RaftGroup.Raft.RaftLog.LastIndex() + 1,
+		term:  d.RaftGroup.Raft.Term,
+		cb:    cb,
+	})
+
+	data, err := msg.Marshal()
+	if err != nil {
+		log.Panic(err)
+	}
+
+	err = d.RaftGroup.Propose(data)
+	if err != nil {
+		log.Panic(err)
+	}
 }
 
 func (d *peerMsgHandler) onTick() {
@@ -223,9 +248,9 @@ func (d *peerMsgHandler) validateRaftMessage(msg *rspb.RaftMessage) bool {
 	return true
 }
 
-/// Checks if the message is sent to the correct peer.
-///
-/// Returns true means that the message can be dropped silently.
+// / Checks if the message is sent to the correct peer.
+// /
+// / Returns true means that the message can be dropped silently.
 func (d *peerMsgHandler) checkMessage(msg *rspb.RaftMessage) bool {
 	fromEpoch := msg.GetRegionEpoch()
 	isVoteMsg := util.IsVoteMessage(msg.Message)
