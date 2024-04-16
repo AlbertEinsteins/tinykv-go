@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-	"sync/atomic"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -71,8 +70,6 @@ type Ready struct {
 type RawNode struct {
 	Raft *Raft
 	// Your Data Here (2A).
-	readyPending int32
-
 	lastSoftState *SoftState
 	lastHardState pb.HardState
 }
@@ -83,8 +80,9 @@ func NewRawNode(config *Config) (*RawNode, error) {
 	rawNode := &RawNode{
 		Raft: newRaft(config),
 	}
-
-	atomic.StoreInt32(&rawNode.readyPending, 0)
+	// init softstate and hard state
+	rawNode.lastSoftState = rawNode.Raft.softState()
+	rawNode.lastHardState = rawNode.Raft.hardState()
 	return rawNode, nil
 }
 
@@ -152,58 +150,68 @@ func (rn *RawNode) Step(m pb.Message) error {
 
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
-	if rn.HasReady() {
+	if !rn.HasReady() {
 		return rn.Ready()
 	}
 
-	// fmt.Println("xxx")
 	// Your Code Here (2A).
 	unstableEntries := rn.Raft.RaftLog.unstableEntries()
 	commitedEntries := rn.Raft.RaftLog.nextEnts()
 	sendMsgs := rn.readMessages()
 
-	curSoftState := &SoftState{
-		Lead:      rn.Raft.Lead,
-		RaftState: rn.Raft.State,
-	}
-
-	curPdState := pb.HardState{
-		Term:   rn.Raft.Term,
-		Vote:   rn.Raft.Vote,
-		Commit: rn.Raft.RaftLog.committed,
-	}
-
+	curSoftState := rn.Raft.softState()
+	curHardState := rn.Raft.hardState()
 	ready := Ready{
 		Entries:          unstableEntries,
 		CommittedEntries: commitedEntries,
 		Messages:         sendMsgs,
 	}
 
-	if rn.lastSoftState != nil && !IsSoftStateEqual(curSoftState, rn.lastSoftState) {
+	// update last state
+	if !IsSoftStateEqual(rn.lastSoftState, curSoftState) {
 		ready.SoftState = curSoftState
-		rn.lastSoftState = curSoftState
 	}
 
-	if !IsEmptyHardState(rn.lastHardState) && !isHardStateEqual(curPdState, rn.lastHardState) {
-		ready.HardState = curPdState
-		rn.lastHardState = curPdState
+	if !isHardStateEqual(rn.lastHardState, curHardState) {
+		ready.HardState = curHardState
 	}
 
-	atomic.StoreInt32(&rn.readyPending, 1)
+	rn.lastSoftState = curSoftState
+	rn.lastHardState = curHardState
 	return ready
 }
 
 func (rn *RawNode) readMessages() []pb.Message {
-	msgs := rn.Raft.msgs
-	rn.Raft.msgs = make([]pb.Message, 0)
+	if len(rn.Raft.msgs) == 0 {
+		return nil
+	}
 
+	msgs := make([]pb.Message, len(rn.Raft.msgs))
+	copy(msgs, rn.Raft.msgs)
+	rn.Raft.msgs = make([]pb.Message, 0)
 	return msgs
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
-	return atomic.LoadInt32(&rn.readyPending) == 1
+	r := rn.Raft
+
+	// fmt.Printf(" last soft %v, last hard %v, cur soft state %v, hard state %v\n", rn.lastSoftState, rn.lastHardState,
+	// 	r.softState(), r.hardState())
+
+	if !IsSoftStateEqual(r.softState(), rn.lastSoftState) {
+		return true
+	}
+
+	if !IsEmptyHardState(r.hardState()) && !isHardStateEqual(r.hardState(), rn.lastHardState) {
+		return true
+	}
+
+	if len(r.msgs) > 0 || len(r.RaftLog.unstableEntries()) > 0 || len(r.RaftLog.nextEnts()) > 0 {
+		return true
+	}
+	return false
 }
 
 // Advance notifies the RawNode that the application has applied and saved progress in the
@@ -218,8 +226,6 @@ func (rn *RawNode) Advance(rd Ready) {
 	// fmt.Println(rd.Commit, rd.CommittedEntries)
 	rn.Raft.RaftLog.applied += uint64(len(rd.CommittedEntries))
 	rn.Raft.RaftLog.stabled += uint64(len(rd.Entries))
-
-	atomic.StoreInt32(&rn.readyPending, 0)
 }
 
 // GetProgress return the Progress of this node and its peers, if this

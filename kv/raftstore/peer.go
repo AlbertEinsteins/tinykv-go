@@ -39,6 +39,7 @@ func createPeer(storeID uint64, cfg *config.Config, sched chan<- worker.Task,
 		return nil, errors.Errorf("find no peer for store %d in region %v", storeID, region)
 	}
 	log.Infof("region %v create peer with ID %d", region, metaPeer.Id)
+
 	return NewPeer(storeID, cfg, engines, region, sched, metaPeer)
 }
 
@@ -125,6 +126,11 @@ func NewPeer(storeId uint64, cfg *config.Config, engines *engine_util.Engines, r
 
 	appliedIndex := ps.AppliedIndex()
 
+	// peerIds := make([]uint64, len(region.Peers))
+	// for _, peer := range region.Peers {
+	// 	peerIds = append(peerIds, peer.Id)
+	// }
+
 	raftCfg := &raft.Config{
 		ID:            meta.GetId(),
 		ElectionTick:  cfg.RaftElectionTimeoutTicks,
@@ -137,6 +143,7 @@ func NewPeer(storeId uint64, cfg *config.Config, engines *engine_util.Engines, r
 	if err != nil {
 		return nil, err
 	}
+
 	p := &peer{
 		Meta:                  meta,
 		regionId:              region.GetId(),

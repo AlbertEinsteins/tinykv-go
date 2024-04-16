@@ -132,5 +132,10 @@ func IsSoftStateEqual(a, b *SoftState) bool {
 	if a == nil && b == nil {
 		return true
 	}
+
+	if a == nil || b == nil {
+		return false
+	}
+
 	return a.Lead == b.Lead && a.RaftState == b.RaftState
 }

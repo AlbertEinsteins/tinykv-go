@@ -53,6 +53,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 
 	ready := d.RaftGroup.Ready()
 
+	// fmt.Println(ready)
 	// Save Locally, And Send
 	_, err := d.peer.peerStorage.SaveReadyState(&ready)
 	if err != nil {
@@ -99,6 +100,7 @@ func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb
 
 	// check valid
 	logIndex, term := ent.Index, ent.Term
+	fmt.Println("cur proposals ", d.proposals)
 	firstProposal := d.proposals[0]
 	fmt.Println("receive a ", firstProposal.index, logIndex)
 
@@ -222,13 +224,13 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 }
 
 func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
+	fmt.Println("propose")
 	err := d.preProposeRaftCommand(msg)
 	if err != nil {
 		cb.Done(ErrResp(err))
 		return
 	}
 	// Your Code Here (2B).
-	fmt.Println("xxxxx")
 	if msg.Requests != nil {
 		d.propocessClientMsg(msg, cb)
 	} else { // handle admin requests
@@ -237,7 +239,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 }
 
 func (d *peerMsgHandler) propocessClientMsg(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
-	log.Info("xxx")
+	log.Info("process client msg")
 
 	d.proposals = append(d.proposals, &proposal{
 		index: d.RaftGroup.Raft.RaftLog.LastIndex() + 1,

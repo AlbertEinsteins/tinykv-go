@@ -188,6 +188,7 @@ func (c *Cluster) Request(key []byte, reqs []*raft_cmdpb.Request, timeout time.D
 	for i := 0; i < 10 || time.Since(startTime) < timeout; i++ {
 		region := c.GetRegion(key)
 		regionID := region.GetId()
+
 		req := NewRequest(regionID, region.RegionEpoch, reqs)
 		resp, txn := c.CallCommandOnLeader(&req, timeout)
 		if resp == nil {
@@ -303,6 +304,7 @@ func (c *Cluster) MustPut(key, value []byte) {
 func (c *Cluster) MustPutCF(cf string, key, value []byte) {
 	req := NewPutCfCmd(cf, key, value)
 	resp, _ := c.Request(key, []*raft_cmdpb.Request{req}, 5*time.Second)
+	fmt.Println(resp)
 	if resp.Header.Error != nil {
 		panic(resp.Header.Error)
 	}

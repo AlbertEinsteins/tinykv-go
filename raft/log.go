@@ -15,6 +15,8 @@
 package raft
 
 import (
+	"fmt"
+
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -72,8 +74,11 @@ func newLog(storage Storage) *RaftLog {
 		panic(err)
 	}
 
+	fmt.Printf("storage first last %d, %d\n", firstIndex, lastIndex)
 	// check if only exists the dummy log
 	if firstIndex > lastIndex {
+		// set state
+		raftLog.stabled = lastIndex
 		return raftLog
 	}
 
@@ -129,6 +134,9 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 
 	start := l.applied + 1 - offset
 	end := l.committed - offset
+
+	fmt.Println(offset, l.applied, l.committed, l.entries)
+
 	// fmt.Println(offset, start, end+1)
 	ents = append(ents, l.entries[start:end+1]...)
 	return ents
@@ -137,7 +145,13 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	if len(l.entries) == 0 {
-		return 0
+		// snapshot already, only exists dummy log
+		lastIdx, err := l.storage.LastIndex()
+		if err != nil {
+			panic(err)
+		}
+
+		return lastIdx
 	}
 	// Your Code Here (2A).
 	return l.entries[len(l.entries)-1].Index

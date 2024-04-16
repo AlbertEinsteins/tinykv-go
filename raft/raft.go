@@ -171,27 +171,53 @@ func newRaft(c *Config) *Raft {
 	if err := c.validate(); err != nil {
 		panic(err.Error())
 	}
+
+	log.Infof("init raft module, peers %v", c.peers)
 	// Your Code Here (2A).
+
 	raft := &Raft{
 		id:               c.ID,
 		electionTimeout:  c.ElectionTick,
 		heartbeatTimeout: c.HeartbeatTick,
 		RaftLog:          newLog(c.Storage),
-		State:            StateFollower,
 		peers:            c.peers,
 	}
 
 	// init state or restore
-	hardState, _, err := c.Storage.InitialState()
+	hardState, confState, err := c.Storage.InitialState()
 	if err != nil {
 		panic(err)
+	}
+
+	if len(c.peers) == 0 {
+		raft.peers = confState.Nodes
 	}
 
 	raft.becomeFollower(hardState.Term, hardState.Vote)
 	raft.RaftLog.committed = hardState.Commit
 
+	raft.RaftLog.applied = c.Applied
+
+	log.Infof("raft-%d restart with last index %d", raft.id, raft.RaftLog.LastIndex())
 	raft.initProgress(raft.RaftLog.LastIndex() + 1)
 	return raft
+}
+
+// softState return the current raft state
+func (r *Raft) softState() *SoftState {
+	return &SoftState{
+		r.Lead,
+		r.State,
+	}
+}
+
+// softState return the current raft state
+func (r *Raft) hardState() pb.HardState {
+	return pb.HardState{
+		Term:   r.Term,
+		Vote:   r.Vote,
+		Commit: r.RaftLog.committed,
+	}
 }
 
 // tick advances the internal logical clock by a single tick.
@@ -436,6 +462,7 @@ func (r *Raft) startElection() {
 	latestCommitedIdx := r.RaftLog.committed
 	lastLogIndex := r.RaftLog.LastIndex()
 	lastLogTerm, _ := r.RaftLog.Term(lastLogIndex)
+
 	for _, peerId := range r.peers {
 		if peerId == r.id {
 			continue
