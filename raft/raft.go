@@ -280,6 +280,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Lead = lead
 	r.Vote = lead
 	r.randomElectionTimeout = r.electionTimeout + rand.Intn(r.electionTimeout)
+	r.electionElapsed = 0
 }
 
 // becomeCandidate transform this peer's state to candidate

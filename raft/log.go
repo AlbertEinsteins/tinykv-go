@@ -168,6 +168,7 @@ func (l *RaftLog) FirstIndex() uint64 {
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
 	// check entries
+	fmt.Println(i, l.stabled)
 	if i <= l.stabled {
 		return l.storage.Term(i)
 	}

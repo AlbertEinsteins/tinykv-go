@@ -139,3 +139,7 @@ func IsSoftStateEqual(a, b *SoftState) bool {
 
 	return a.Lead == b.Lead && a.RaftState == b.RaftState
 }
+
+func IsNoopEntry(a pb.Entry) bool {
+	return a.Data == nil && a.EntryType == pb.EntryType_EntryNormal
+}

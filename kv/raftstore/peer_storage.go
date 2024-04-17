@@ -313,7 +313,6 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 		return nil
 	}
 	// append any new entry,
-	// delete any previously appended log entries
 	for _, ent := range entries {
 		if err := raftWB.SetMeta(meta.RaftLogKey(ps.region.Id, ent.Index), &ent); err != nil {
 			log.Panic(err)
@@ -325,7 +324,7 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	curLastLogIdx, curLastLogTerm := entries[nLen-1].Index, entries[nLen-1].Term
 	prevLastIdx, _ := ps.LastIndex()
 
-	log.Debugf("region id {%d}, ready entries lastIdx {%d}, prevLastIdx {%d}",
+	log.Infof("region id {%d}, ready entries lastIdx {%d}, prevLastIdx {%d}",
 		ps.region.Id, curLastLogIdx, prevLastIdx)
 
 	for idx := curLastLogIdx + 1; idx <= prevLastIdx; idx++ {

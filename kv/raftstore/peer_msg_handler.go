@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/raft_cmdpb"
 	rspb "github.com/pingcap-incubator/tinykv/proto/pkg/raft_serverpb"
+	"github.com/pingcap-incubator/tinykv/raft"
 	"github.com/pingcap-incubator/tinykv/scheduler/pkg/btree"
 	"github.com/pingcap/errors"
 )
@@ -91,6 +92,12 @@ func (d *peerMsgHandler) HandleRaftReady() {
 }
 
 func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb.Entry) {
+	fmt.Println(ent)
+	if raft.IsNoopEntry(ent) {
+		fmt.Println("noop entry")
+		return
+	}
+
 	cmdReq := raft_cmdpb.RaftCmdRequest{}
 
 	err := proto.Unmarshal(ent.Data, &cmdReq)
