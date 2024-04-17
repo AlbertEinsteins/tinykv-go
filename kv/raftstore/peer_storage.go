@@ -58,7 +58,6 @@ func NewPeerStorage(engines *engine_util.Engines, region *metapb.Region, regionS
 		return nil, err
 	}
 	applyState, err := meta.InitApplyState(engines.Kv, region)
-	fmt.Println(raftState, applyState)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +140,8 @@ func (ps *PeerStorage) Term(idx uint64) (uint64, error) {
 	if err := engine_util.GetMeta(ps.Engines.Raft, meta.RaftLogKey(ps.region.Id, idx), &entry); err != nil {
 		return 0, err
 	}
+
+	// fmt.Printf("access idx {%d}, term {%d} %v\n", idx, entry.Term, entry)
 	return entry.Term, nil
 }
 
@@ -314,6 +315,7 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	}
 	// append any new entry,
 	for _, ent := range entries {
+		// log.Infof("peer id, save to storage index {%d}", ent.Index)
 		if err := raftWB.SetMeta(meta.RaftLogKey(ps.region.Id, ent.Index), &ent); err != nil {
 			log.Panic(err)
 		}
@@ -324,8 +326,8 @@ func (ps *PeerStorage) Append(entries []eraftpb.Entry, raftWB *engine_util.Write
 	curLastLogIdx, curLastLogTerm := entries[nLen-1].Index, entries[nLen-1].Term
 	prevLastIdx, _ := ps.LastIndex()
 
-	log.Infof("region id {%d}, ready entries lastIdx {%d}, prevLastIdx {%d}",
-		ps.region.Id, curLastLogIdx, prevLastIdx)
+	// log.Infof("region id {%d}, ready entries lastIdx {%d}, prevLastIdx {%d}",
+	// 	ps.region.Id, curLastLogIdx, prevLastIdx)
 
 	for idx := curLastLogIdx + 1; idx <= prevLastIdx; idx++ {
 		raftWB.DeleteMeta(meta.RaftLogKey(ps.region.Id, idx))
@@ -369,6 +371,11 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 	}
 
 	if err := writeBatch.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
+		log.Panic(err)
+	}
+
+	// save to storage
+	if err := writeBatch.WriteToDB(ps.Engines.Raft); err != nil {
 		log.Panic(err)
 	}
 

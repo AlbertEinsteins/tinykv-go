@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sort"
 
@@ -172,7 +173,7 @@ func newRaft(c *Config) *Raft {
 		panic(err.Error())
 	}
 
-	log.Infof("init raft module, peers %v", c.peers)
+	log.Debugf("init raft module, peers %v", c.peers)
 	// Your Code Here (2A).
 
 	raft := &Raft{
@@ -198,7 +199,7 @@ func newRaft(c *Config) *Raft {
 
 	raft.RaftLog.applied = c.Applied
 
-	log.Infof("raft-%d restart with last index %d", raft.id, raft.RaftLog.LastIndex())
+	log.Debugf("raft-%d restart with last index %d", raft.id, raft.RaftLog.LastIndex())
 	raft.initProgress(raft.RaftLog.LastIndex() + 1)
 	return raft
 }
@@ -240,7 +241,7 @@ func (r *Raft) tick() {
 }
 
 func (r *Raft) triggerElection() {
-	log.Infof("node-%d start to singal elect, election ets %v", r.id, r.electionElapsed)
+	log.Debugf("node-%d start to singal elect, election ets %v", r.id, r.electionElapsed)
 
 	electionStartMsg := pb.Message{
 		MsgType: pb.MessageType_MsgHup,
@@ -251,7 +252,7 @@ func (r *Raft) triggerElection() {
 }
 
 func (r *Raft) triggerHearbeat() {
-	log.Infof("node-[%d] start to signal send heartbeat\n", r.id)
+	log.Debugf("node-[%d] start to signal send heartbeat\n", r.id)
 	heartbeatStartMsg := pb.Message{
 		MsgType: pb.MessageType_MsgBeat,
 		From:    r.id,
@@ -273,7 +274,7 @@ func (r *Raft) initProgress(nextIndex uint64) {
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
-	log.Infof("node-[%d] turns to follower with leader [%d] in term {%d}", r.id, lead, term)
+	log.Debugf("node-[%d] turns to follower with leader [%d] in term {%d}", r.id, lead, term)
 	// Your Code Here (2A).
 	r.State = StateFollower
 	r.Term = term
@@ -297,7 +298,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
-	log.Infof("node-[%d] turns to leader", r.id)
+	log.Debugf("node-[%d] turns to leader", r.id)
 	r.State = StateLeader
 	r.electionElapsed = 0
 
@@ -319,6 +320,7 @@ func (r *Raft) becomeLeader() {
 }
 
 func (r *Raft) updateProcess(peer, nextMatch, nextNext uint64) {
+	// log.Infof("node-[%d] update match idx {%d}, next {%d}", peer, nextMatch, nextNext)
 	r.Prs[peer].Match = max(r.Prs[peer].Match, nextMatch)
 	r.Prs[peer].Next = nextNext
 }
@@ -390,7 +392,7 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 
 // ================ operation function ======================
 func (r *Raft) handlePropose(m pb.Message) {
-	log.Infof("node-[%d] start to propose", r.id)
+	log.Debugf("node-[%d] start to propose", r.id)
 
 	// save local
 	lastLogIdx := r.RaftLog.LastIndex()
@@ -438,7 +440,7 @@ func (r *Raft) appendLocally(entries []pb.Entry) {
 
 func (r *Raft) startElection() {
 	r.becomeCandidate()
-	log.Infof("node-[%d] start to election in term {%d}", r.id, r.Term)
+	log.Debugf("node-[%d] start to election in term {%d}", r.id, r.Term)
 
 	r.initVotes()
 	r.Vote = r.id
@@ -482,7 +484,7 @@ func (r *Raft) startElection() {
 }
 
 func (r *Raft) startHeartBeat() {
-	log.Infof("node-[%d] start to send hearbeat in term {%d}", r.id, r.Term+1)
+	log.Debugf("node-[%d] start to send hearbeat in term {%d}", r.id, r.Term)
 
 	for _, peerId := range r.peers {
 		if peerId == r.id {
@@ -497,7 +499,7 @@ func (r *Raft) startHeartBeat() {
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
-	log.Infof("node-[%d] start to send ae to node-{%d} in term {%d}",
+	log.Debugf("node-[%d] start to send ae to node-{%d} in term {%d}",
 		r.id, to, r.Term)
 
 	r.send(to, pb.MessageType_MsgAppend)
@@ -516,6 +518,7 @@ func (r *Raft) send(to uint64, msgType pb.MessageType) {
 
 	prevLogIdx := nextId - 1
 	prevLogTerm, err := r.RaftLog.Term(prevLogIdx)
+	// log.Infof("peer {%d}, send to {%d} prevLogIdx {%d}, prevlogterm {%d}", r.id, to, prevLogIdx, prevLogTerm)
 	if err != nil {
 		panic(err)
 	}
@@ -549,7 +552,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 
 // handle requestvote rpc request
 func (r *Raft) handleRequestVote(m pb.Message) {
-	log.Infof("node-[%d] in term {%d} state {%v} receive a vote request in term {%v} from node {%d}",
+	log.Debugf("node-[%d] in term {%d} state {%v} receive a vote request in term {%v} from node {%d}",
 		r.id, r.Term, r.State.String(), m.Term, m.From)
 
 	if m.Term < r.Term {
@@ -591,7 +594,7 @@ func (r *Raft) canVoteFor(from, lastLogTerm, lastLogIndex uint64) bool {
 	curLastLogIndex := r.RaftLog.LastIndex()
 	curLastLogTerm, _ := r.RaftLog.Term(curLastLogIndex)
 
-	log.Infof("node-[%d] <%d,%d>, candidate <%d,%d>", r.id, curLastLogIndex, curLastLogTerm,
+	log.Debugf("node-[%d] <%d,%d>, candidate <%d,%d>", r.id, curLastLogIndex, curLastLogTerm,
 		lastLogIndex, lastLogTerm)
 	if lastLogTerm > curLastLogTerm ||
 		(lastLogTerm == curLastLogTerm && lastLogIndex >= curLastLogIndex) {
@@ -601,7 +604,7 @@ func (r *Raft) canVoteFor(from, lastLogTerm, lastLogIndex uint64) bool {
 }
 
 func (r *Raft) handleRequestVoteResponse(m pb.Message) {
-	log.Infof("node-[%d] receive a vote response from [%d], is vote {%v}", r.id, m.From, !m.Reject)
+	log.Debugf("node-[%d] receive a vote response from [%d], is vote {%v}", r.id, m.From, !m.Reject)
 	if m.Term < r.Term { // old term request, ignore
 		return
 	}
@@ -652,7 +655,7 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
-	log.Infof("node-[%d] in term {%d} receive a append msg in term {%d} from node-[%d], data %v, prevlog,prevterm <%d, %d>",
+	log.Debugf("node-[%d] in term {%d} receive a append msg in term {%d} from node-[%d], data %v, prevlog,prevterm <%d, %d>",
 		r.id, r.Term, m.Term, m.From, m.Entries, m.Index, m.LogTerm)
 
 	if m.Term < r.Term {
@@ -661,6 +664,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			From:    r.id,
 			To:      m.From,
 			Term:    r.Term,
+			Reject:  true,
 		})
 		return
 	}
@@ -669,18 +673,18 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		r.becomeFollower(m.Term, m.From)
 	}
 
-	prevLogIndex := m.LogTerm
-	prevLogTerm := m.Index
+	prevLogIndex := m.Index
+	prevLogTerm := m.LogTerm
 	if r.conflictAt(prevLogIndex, prevLogTerm) {
 		// compute match index, rtn to leader
-		// fmt.Println("conflict")
+		fmt.Printf("node-[%d] append conflict at idx {%d}\n", r.id, prevLogIndex)
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgAppendResponse,
 			From:    r.id,
 			To:      m.From,
 			Term:    r.Term,
 			Reject:  true,
-			Index:   0,
+			Index:   prevLogIndex,
 		})
 		return
 	}
@@ -717,7 +721,7 @@ func (r *Raft) processEntries(m *pb.Message) {
 		if appendIdx <= r.RaftLog.LastIndex() {
 			if r.conflictAt(appendIdx, ent.Term) {
 				// delete [appendIdx:]
-				log.Infof("node-[%d] remove the entry after index {%d}", r.id, appendIdx)
+				log.Debugf("node-[%d] remove the entry after index {%d}", r.id, appendIdx)
 				r.removeConflictEntryAfter(appendIdx)
 				break
 			} else {
@@ -751,7 +755,7 @@ func (r *Raft) removeConflictEntryAfter(index uint64) {
 func (r *Raft) commitFollower(leaderCommited, lastNewEntIdx uint64) {
 	if leaderCommited > r.RaftLog.committed {
 		r.RaftLog.committed = min(leaderCommited, lastNewEntIdx)
-		log.Infof("node-[%d] in follower state commit index to {%d}", r.id, r.RaftLog.committed)
+		log.Debugf("node-[%d] in follower state commit index to {%d}", r.id, r.RaftLog.committed)
 	}
 }
 
@@ -764,12 +768,11 @@ func (r *Raft) conflictAt(prevLogIdx, prevLogTerm uint64) bool {
 	if err != nil {
 		panic(err)
 	}
-
 	return term != prevLogTerm
 }
 
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
-	log.Infof("node-[%d] in term {%d} receive a append response in term {%d} from node-[%d]",
+	log.Debugf("node-[%d] in term {%d} receive a append response in term {%d} from node-[%d]",
 		r.id, r.Term, m.Term, m.From)
 
 	if m.Term < r.Term {
@@ -788,9 +791,9 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		r.updateCommitIndex()
 	} else {
 		// conflict entry, retry
+		log.Debugf("node-[%d] in leader state receive a conflict append response from node-{%d}", r.id, m.From)
 		r.Prs[m.From].Next--
 		r.sendAppend(m.From)
-		log.Infof("node-[%d] in leader state receive a conflict append response from node-{%d}", r.id, m.From)
 	}
 
 }
@@ -825,7 +828,7 @@ func (r *Raft) updateCommitIndex() {
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
-	log.Infof("node-[%d] in term {%d} receive a hearbeat msg in term {%d}, leader commit {%d}, cur logs {%d}, request %v",
+	log.Debugf("node-[%d] in term {%d} receive a hearbeat msg in term {%d}, leader commit {%d}, cur logs {%d}, request %v",
 		r.id, r.Term, m.Term, m.Commit, r.RaftLog.allEntries(), m)
 	if m.Term < r.Term {
 		r.msgs = append(r.msgs, pb.Message{
@@ -869,7 +872,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 }
 
 func (r *Raft) handleHeartBeatResponse(m pb.Message) {
-	log.Infof("node-[%d] receive a heartbeat response from node-[%d] in term {%d}", r.id, m.From, m.Term)
+	// log.Debugf("node-[%d] receive a heartbeat response from node-[%d] in term {%d}", r.id, m.From, m.Term)
 	if m.Term < r.Term {
 		return
 	}
@@ -886,7 +889,6 @@ func (r *Raft) handleHeartBeatResponse(m pb.Message) {
 		r.updateCommitIndex()
 
 		// if follower's log is too short, need to replicate
-
 		if r.RaftLog.committed > m.Commit {
 			r.sendAppend(m.From)
 		}

@@ -92,34 +92,23 @@ func (d *peerMsgHandler) HandleRaftReady() {
 }
 
 func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb.Entry) {
-	fmt.Println(ent)
 	if raft.IsNoopEntry(ent) {
-		fmt.Println("noop entry")
+		// fmt.Println("noop entry")
 		return
 	}
 
 	cmdReq := raft_cmdpb.RaftCmdRequest{}
-
+	_, term := ent.Index, ent.Term
 	err := proto.Unmarshal(ent.Data, &cmdReq)
 	if err != nil {
 		log.Panic(err)
 	}
 
-	// check valid
-	logIndex, term := ent.Index, ent.Term
-	fmt.Println("cur proposals ", d.proposals)
-	firstProposal := d.proposals[0]
-	fmt.Println("receive a ", firstProposal.index, logIndex)
-
-	if firstProposal.index != logIndex || firstProposal.term != term {
-		firstProposal.cb.Done(ErrRespStaleCommand(firstProposal.term))
-		return
-	}
-
 	resp := raft_cmdpb.RaftCmdResponse{}
-
+	isContainSnapCmd := false
 	//exec every cmd
 	for _, clientReq := range cmdReq.Requests {
+		// fmt.Println(d.PeerId(), clientReq)
 		clientResp := raft_cmdpb.Response{}
 
 		switch clientReq.CmdType {
@@ -155,17 +144,45 @@ func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb
 
 			// set val to nil, to delete key
 			wb.SetCF(delReq.Cf, delReq.Key, nil)
+
+		case raft_cmdpb.CmdType_Snap:
+			snapResp := raft_cmdpb.SnapResponse{}
+
+			snapResp.Region = d.Region()
+			// TODO: xxxxx
+			clientResp.CmdType = raft_cmdpb.CmdType_Snap
+			clientResp.Snap = &snapResp
+
+			// Set Resp With Badger Txn
+			isContainSnapCmd = true
 		}
 
 		resp.Responses = append(resp.Responses, &clientResp)
 	}
+
+	if !d.IsLeader() || term != d.Term() { // non-leader
+		return
+	}
+
+	// log.Infof("peer-%d current apply, proposals %v", d.PeerId(), d.proposals)
+	firstProposal := d.proposals[0]
+	d.proposals = d.proposals[1:]
+
+	// log.Infof("%d, first proposal %v, proposals %v", d.PeerId(), firstProposal, d.proposals)
+
+	// log.Infof("peer-%d upper app receive a entry <%d, %d> %v, proposal is <%d, %d>", d.PeerId(), logIndex, term,
+	// 	ent, firstProposal.index, firstProposal.term)
 
 	// notify callback
 	resp.Header = &raft_cmdpb.RaftResponseHeader{
 		CurrentTerm: term,
 	}
 
+	if isContainSnapCmd {
+		firstProposal.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
+	}
 	firstProposal.cb.Done(&resp)
+	// log.Infof("peer-%d first proposal done %v", d.PeerId(), firstProposal)
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
@@ -231,7 +248,7 @@ func (d *peerMsgHandler) preProposeRaftCommand(req *raft_cmdpb.RaftCmdRequest) e
 }
 
 func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
-	fmt.Println("propose")
+	// fmt.Println("propose, client type ", msg.Requests)
 	err := d.preProposeRaftCommand(msg)
 	if err != nil {
 		cb.Done(ErrResp(err))
@@ -246,13 +263,14 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 }
 
 func (d *peerMsgHandler) propocessClientMsg(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
-	log.Info("process client msg")
 
 	d.proposals = append(d.proposals, &proposal{
 		index: d.RaftGroup.Raft.RaftLog.LastIndex() + 1,
 		term:  d.RaftGroup.Raft.Term,
 		cb:    cb,
 	})
+
+	log.Infof("process client msg %v", d.proposals)
 
 	data, err := msg.Marshal()
 	if err != nil {

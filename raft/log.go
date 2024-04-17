@@ -130,14 +130,11 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 
 	// Your Code Here (2A).
 	offset := l.entries[0].Index
-	// fmt.Println(l.entries, l.applied, l.committed, l.stabled)
 
 	start := l.applied + 1 - offset
 	end := l.committed - offset
+	// fmt.Println(offset, l.applied, l.committed, l.entries)
 
-	fmt.Println(offset, l.applied, l.committed, l.entries)
-
-	// fmt.Println(offset, start, end+1)
 	ents = append(ents, l.entries[start:end+1]...)
 	return ents
 }
@@ -167,8 +164,6 @@ func (l *RaftLog) FirstIndex() uint64 {
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	// check entries
-	fmt.Println(i, l.stabled)
 	if i <= l.stabled {
 		return l.storage.Term(i)
 	}

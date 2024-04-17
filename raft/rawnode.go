@@ -214,8 +214,8 @@ func (rn *RawNode) HasReady() bool {
 	return false
 }
 
-// Advance notifies the RawNode that the application has applied and saved progress in the
-// last Ready results.
+// Advance notifies the RawNode that the application has applied and
+// saved progress in the last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
 	// update state
