@@ -193,6 +193,7 @@ func (c *Cluster) Request(key []byte, reqs []*raft_cmdpb.Request, timeout time.D
 		resp, txn := c.CallCommandOnLeader(&req, timeout)
 		if resp == nil {
 			// it should be timeouted innerly
+			fmt.Println("xxx")
 			SleepMS(100)
 			continue
 		}

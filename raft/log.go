@@ -15,8 +15,6 @@
 package raft
 
 import (
-	"fmt"
-
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -74,7 +72,7 @@ func newLog(storage Storage) *RaftLog {
 		panic(err)
 	}
 
-	fmt.Printf("storage first last %d, %d\n", firstIndex, lastIndex)
+	// fmt.Printf("storage first last %d, %d\n", firstIndex, lastIndex)
 	// check if only exists the dummy log
 	if firstIndex > lastIndex {
 		// set state
@@ -97,6 +95,7 @@ func newLog(storage Storage) *RaftLog {
 // grow unlimitedly in memory
 func (l *RaftLog) maybeCompact() {
 	// Your Code Here (2C).
+
 }
 
 // allEntries return all the entries not compacted.
@@ -124,7 +123,8 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	if len(l.entries) == 0 {
+	if len(l.entries) == 0 || l.applied > l.committed {
+		// fmt.Println(l.applied, l.committed)
 		return nil
 	}
 
@@ -133,8 +133,8 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 
 	start := l.applied + 1 - offset
 	end := l.committed - offset
-	// fmt.Println(offset, l.applied, l.committed, l.entries)
 
+	// fmt.Println(offset, l.applied, l.committed, l.entries[len(l.entries)-1].Index)
 	ents = append(ents, l.entries[start:end+1]...)
 	return ents
 }

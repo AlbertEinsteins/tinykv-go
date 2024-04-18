@@ -16,7 +16,6 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"sort"
 
@@ -199,7 +198,8 @@ func newRaft(c *Config) *Raft {
 
 	raft.RaftLog.applied = c.Applied
 
-	log.Debugf("raft-%d restart with last index %d", raft.id, raft.RaftLog.LastIndex())
+	log.Infof("raft-%d restart with last index %d, commited %d, applied %d",
+		raft.id, raft.RaftLog.LastIndex(), raft.RaftLog.committed, raft.RaftLog.applied)
 	raft.initProgress(raft.RaftLog.LastIndex() + 1)
 	return raft
 }
@@ -298,7 +298,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
-	log.Debugf("node-[%d] turns to leader", r.id)
+	log.Infof("node-[%d] turns to leader at term {%d}", r.id, r.Term)
 	r.State = StateLeader
 	r.electionElapsed = 0
 
@@ -655,8 +655,8 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
-	log.Debugf("node-[%d] in term {%d} receive a append msg in term {%d} from node-[%d], data %v, prevlog,prevterm <%d, %d>",
-		r.id, r.Term, m.Term, m.From, m.Entries, m.Index, m.LogTerm)
+	// log.Infof("node-[%d] in term {%d} receive a append msg in term {%d} from node-[%d], data %v, prevlog,prevterm <%d, %d>",
+	// 	r.id, r.Term, m.Term, m.From, m.Entries, m.Index, m.LogTerm)
 
 	if m.Term < r.Term {
 		r.msgs = append(r.msgs, pb.Message{
@@ -677,7 +677,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	prevLogTerm := m.LogTerm
 	if r.conflictAt(prevLogIndex, prevLogTerm) {
 		// compute match index, rtn to leader
-		fmt.Printf("node-[%d] append conflict at idx {%d}\n", r.id, prevLogIndex)
+		// fmt.Printf("node-[%d] append conflict at idx {%d}\n", r.id, prevLogIndex)
+
+		// find
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgAppendResponse,
 			From:    r.id,
@@ -703,22 +705,15 @@ func (r *Raft) processEntries(m *pb.Message) {
 	// entries := m.Entries
 	// TODO: append any new entries
 
-	// fmt.Printf("cur raftlog %+v\n", r.RaftLog.entries)
-	// fmt.Printf("%+v\n", m.Entries)
-
-	// lastIdx := r.RaftLog.LastIndex()
-	// ssents, err := r.RaftLog.storage.Entries(1, lastIdx+1)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
 	// fmt.Printf("cur storage %+v\n", ssents)
-
+	// log.Infof("node-%d start to process entries %v, <%d, %d>", r.id, m.Entries, m.Index, m.LogTerm)
 	idx := 0
 	appendIdx := m.Index // get prevlogindex from msg
 	for _, ent := range m.Entries {
 		appendIdx++
+		// log.Infof("ent {%d, %d}, cur logs %v", appendIdx, ent.Term, r.RaftLog.entries)
 		if appendIdx <= r.RaftLog.LastIndex() {
+			// fmt.Printf("node-[%d] append conflict at <%d>\n", r.id, appendIdx)
 			if r.conflictAt(appendIdx, ent.Term) {
 				// delete [appendIdx:]
 				log.Debugf("node-[%d] remove the entry after index {%d}", r.id, appendIdx)
@@ -733,16 +728,17 @@ func (r *Raft) processEntries(m *pb.Message) {
 		}
 	}
 
-	lastNewEntIdx := m.Index
+	lastNewIdx := m.Index
 	if len(m.Entries) > 0 {
 		for _, ent := range m.Entries[idx:] {
 			r.RaftLog.entries = append(r.RaftLog.entries, *ent)
 		}
 
-		lastNewEntIdx = m.Entries[len(m.Entries)-1].Index
+		// log.Infof("node-[%d] after append, current entries %v", r.id, r.RaftLog.entries)
+		lastNewIdx = m.Entries[len(m.Entries)-1].Index
 	}
 
-	r.commitFollower(m.Commit, lastNewEntIdx)
+	r.commitFollower(m.Commit, lastNewIdx)
 }
 
 // Delete Conflict Entries after given index
@@ -752,10 +748,11 @@ func (r *Raft) removeConflictEntryAfter(index uint64) {
 	r.RaftLog.entries = r.RaftLog.entries[:index-startPos]
 }
 
-func (r *Raft) commitFollower(leaderCommited, lastNewEntIdx uint64) {
+func (r *Raft) commitFollower(leaderCommited, lastNewIdx uint64) {
 	if leaderCommited > r.RaftLog.committed {
-		r.RaftLog.committed = min(leaderCommited, lastNewEntIdx)
-		log.Debugf("node-[%d] in follower state commit index to {%d}", r.id, r.RaftLog.committed)
+		r.RaftLog.committed = max(r.RaftLog.committed, min(leaderCommited, lastNewIdx))
+		// log.Infof("node-[%d] in follower state commit index to {%d}, applied index {%d}", r.id, r.RaftLog.committed,
+		// 	r.RaftLog.applied)
 	}
 }
 
@@ -765,9 +762,13 @@ func (r *Raft) conflictAt(prevLogIdx, prevLogTerm uint64) bool {
 	}
 
 	term, err := r.RaftLog.Term(prevLogIdx)
+
+	// log.Infof("node-[%d] receive previdx %d, prevterm %d, cur term %d", r.id,
+	// 	prevLogIdx, prevLogTerm, term)
 	if err != nil {
 		panic(err)
 	}
+
 	return term != prevLogTerm
 }
 
@@ -813,7 +814,7 @@ func (r *Raft) updateCommitIndex() {
 
 	if N > r.RaftLog.committed && r.RaftLog.LogAt(N).Term == r.Term {
 		r.RaftLog.committed = N
-		log.Infof("node-[%d] after updated, current commit idx : %d", r.id, r.RaftLog.committed)
+		// log.Infof("node-[%d] after updated, current commit idx : %d", r.id, r.RaftLog.committed)
 
 		// update follower commit idx
 		for _, peer := range r.peers {
@@ -844,8 +845,8 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		r.becomeFollower(m.Term, m.From)
 	}
 
-	prevLogIndex := m.LogTerm
-	prevLogTerm := m.Index
+	prevLogIndex := m.Index
+	prevLogTerm := m.LogTerm
 	if r.conflictAt(prevLogIndex, prevLogTerm) {
 		// compute match index, rtn to leader
 		// fmt.Println("conflict")
@@ -898,6 +899,7 @@ func (r *Raft) handleHeartBeatResponse(m pb.Message) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
+
 }
 
 // addNode add a new node to raft group

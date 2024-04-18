@@ -176,8 +176,6 @@ func (rn *RawNode) Ready() Ready {
 		ready.HardState = curHardState
 	}
 
-	rn.lastSoftState = curSoftState
-	rn.lastHardState = curHardState
 	return ready
 }
 
@@ -196,9 +194,6 @@ func (rn *RawNode) readMessages() []pb.Message {
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
 	r := rn.Raft
-
-	// fmt.Printf(" last soft %v, last hard %v, cur soft state %v, hard state %v\n", rn.lastSoftState, rn.lastHardState,
-	// 	r.softState(), r.hardState())
 
 	if !IsSoftStateEqual(r.softState(), rn.lastSoftState) {
 		return true
@@ -223,9 +218,24 @@ func (rn *RawNode) Advance(rd Ready) {
 	if !rn.HasReady() { // wait a ready
 		return
 	}
-	// fmt.Println(rd.Commit, rd.CommittedEntries)
-	rn.Raft.RaftLog.applied += uint64(len(rd.CommittedEntries))
-	rn.Raft.RaftLog.stabled += uint64(len(rd.Entries))
+
+	if rd.SoftState != nil {
+		rn.lastSoftState = rd.SoftState
+	}
+	if !IsEmptyHardState(rd.HardState) {
+		rn.lastHardState = rd.HardState
+	}
+
+	if len(rd.Entries) > 0 {
+		rn.Raft.RaftLog.stabled += uint64(len(rd.Entries))
+	}
+
+	if len(rd.CommittedEntries) > 0 {
+		// log.Infof("rn update before {%d}, after {%d}", rn.Raft.RaftLog.applied,
+		// 	rn.Raft.RaftLog.applied+uint64(len(rd.CommittedEntries)))
+		rn.Raft.RaftLog.applied += uint64(len(rd.CommittedEntries))
+	}
+
 }
 
 // GetProgress return the Progress of this node and its peers, if this

@@ -593,6 +593,7 @@ func TestHandleMessageType_MsgAppend2AB(t *testing.T) {
 	}
 
 	for i, tt := range tests {
+		fmt.Println("i=", i)
 		storage := NewMemoryStorage()
 		storage.Append([]pb.Entry{{Index: 1, Term: 1}, {Index: 2, Term: 2}})
 		sm := newTestRaft(1, []uint64{1}, 10, 1, storage)
