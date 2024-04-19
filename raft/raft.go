@@ -511,6 +511,11 @@ func (r *Raft) send(to uint64, msgType pb.MessageType) {
 
 	entries := make([]*pb.Entry, 0)
 	if msgType != pb.MessageType_MsgHeartbeat {
+		if nextId < r.RaftLog.FirstIndex() {
+			r.sendSnapshot(to)
+			return
+		}
+
 		entries = append(entries, r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)...)
 	} else {
 		entries = nil // must be nil, could not be a empty slice
@@ -548,6 +553,23 @@ func (r *Raft) noOpEntry() *pb.Entry {
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
 	r.send(to, pb.MessageType_MsgHeartbeat)
+}
+
+func (r *Raft) sendSnapshot(to uint64) {
+	// get snapshot
+	snapshot, err := r.RaftLog.storage.Snapshot()
+	if err != nil {
+		log.Warnf("node-[%d] snapshot is not ready.............", r.id)
+		return
+	}
+
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType:  pb.MessageType_MsgSnapshot,
+		From:     r.id,
+		To:       to,
+		Term:     r.Term,
+		Snapshot: &snapshot,
+	})
 }
 
 // handle requestvote rpc request
@@ -679,7 +701,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		// compute match index, rtn to leader
 		// fmt.Printf("node-[%d] append conflict at idx {%d}\n", r.id, prevLogIndex)
 
-		// find
+		// TODO: find
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgAppendResponse,
 			From:    r.id,
@@ -702,10 +724,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 }
 
 func (r *Raft) processEntries(m *pb.Message) {
-	// entries := m.Entries
-	// TODO: append any new entries
 
-	// fmt.Printf("cur storage %+v\n", ssents)
 	// log.Infof("node-%d start to process entries %v, <%d, %d>", r.id, m.Entries, m.Index, m.LogTerm)
 	idx := 0
 	appendIdx := m.Index // get prevlogindex from msg
@@ -899,7 +918,7 @@ func (r *Raft) handleHeartBeatResponse(m pb.Message) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
-
+	log.Infof("node-[%d] receive a snapshot request", r.id)
 }
 
 // addNode add a new node to raft group

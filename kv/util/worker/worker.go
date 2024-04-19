@@ -1,6 +1,8 @@
 package worker
 
-import "sync"
+import (
+	"sync"
+)
 
 type TaskStop struct{}
 
@@ -31,6 +33,7 @@ func (w *Worker) Start(handler TaskHandler) {
 		}
 		for {
 			Task := <-w.receiver
+			// fmt.Println("Task ", Task)
 			if _, ok := Task.(TaskStop); ok {
 				return
 			}

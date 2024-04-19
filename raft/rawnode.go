@@ -236,6 +236,8 @@ func (rn *RawNode) Advance(rd Ready) {
 		rn.Raft.RaftLog.applied += uint64(len(rd.CommittedEntries))
 	}
 
+	// do log compact in memory
+	rn.Raft.RaftLog.maybeCompact()
 }
 
 // GetProgress return the Progress of this node and its peers, if this

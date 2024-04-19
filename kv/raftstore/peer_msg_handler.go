@@ -192,14 +192,33 @@ func (d *peerMsgHandler) processAdminRequest(adminReq *raft_cmdpb.AdminRequest, 
 
 	switch adminReq.CmdType {
 	case raft_cmdpb.AdminCmdType_CompactLog:
-		log.Infof("peer-[%d] use schedule task to compact log")
-		d.ctx.raftLogGCTaskSender
+		compactReq := adminReq.CompactLog
+		log.Infof("peer-[%d] use schedule task to compact log, truncated idx {%d}", d.PeerId(), compactReq.CompactIndex)
+
+		if compactReq.CompactIndex > d.peerStorage.truncatedIndex() {
+			truncatedState := d.peerStorage.applyState.TruncatedState
+			truncatedState.Index = compactReq.CompactIndex
+			truncatedState.Term = compactReq.CompactTerm
+
+			d.scheduleSnapshotTask(compactReq.CompactIndex)
+		}
+
 	case raft_cmdpb.AdminCmdType_InvalidAdmin:
 	case raft_cmdpb.AdminCmdType_ChangePeer:
 	case raft_cmdpb.AdminCmdType_TransferLeader:
 	case raft_cmdpb.AdminCmdType_Split:
 	}
 
+}
+
+func (d *peerMsgHandler) scheduleSnapshotTask(compactIndex uint64) {
+	d.ctx.raftLogGCTaskSender <- &runner.RaftLogGCTask{
+		RaftEngine: d.ctx.engine.Raft,
+		RegionID:   d.regionId,
+		StartIdx:   d.LastCompactedIdx,
+		EndIdx:     compactIndex,
+	}
+	d.LastCompactedIdx = compactIndex
 }
 
 func (d *peerMsgHandler) HandleMsg(msg message.Msg) {
@@ -283,7 +302,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 
 func (d *peerMsgHandler) propocessClientMsg(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
 	d.proposals = append(d.proposals, &proposal{
-		index: d.RaftGroup.Raft.RaftLog.LastIndex() + 1,
+		index: d.nextProposalIndex(),
 		term:  d.RaftGroup.Raft.Term,
 		cb:    cb,
 	})
