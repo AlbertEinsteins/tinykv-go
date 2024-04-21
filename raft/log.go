@@ -16,6 +16,7 @@ package raft
 
 import (
 	"fmt"
+	"log"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -54,6 +55,8 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
+	dummy     uint64
+	dummyTerm uint64
 }
 
 // newLog returns log using the given storage. It recovers the log
@@ -107,8 +110,8 @@ func (l *RaftLog) maybeCompact() {
 	//delete entries [:truncatedIndex], excludes truncatedIndex
 	if truncatedIndex >= offset {
 		remainEntries := l.entries[truncatedIndex-offset:]
-		fmt.Printf("truncate %d, offset %d, remain %v\n", truncatedIndex, offset,
-			remainEntries[:1])
+		// fmt.Printf("truncate %d, offset %d, remain %v\n", truncatedIndex, offset,
+		// 	remainEntries[:1])
 
 		l.entries = make([]pb.Entry, 0)
 		l.entries = append(l.entries, remainEntries...)
@@ -148,10 +151,24 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
 	offset := l.entries[0].Index
 
-	start := l.applied + 1 - offset
+	// if start <= offset, get from storage, then with mem
+	if l.applied+1 < offset {
+		entriesInStorage, err := l.storage.Entries(l.applied, offset-1)
+		if err != nil {
+			log.Panic(err)
+		}
+		ents = append(ents, entriesInStorage...)
+	}
+
+	// others, get from mem
+	start := offset
+	if l.applied+1 >= offset {
+		start = l.applied + 1 - offset
+	}
+
 	end := l.committed - offset
 
-	// fmt.Println(offset, l.applied, l.committed, l.entries[len(l.entries)-1].Index)
+	fmt.Println(offset, l.applied, l.committed, l.entries[len(l.entries)-1].Index)
 	ents = append(ents, l.entries[start:end+1]...)
 	return ents
 }
@@ -159,13 +176,7 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	if len(l.entries) == 0 {
-		// snapshot already, only exists dummy log
-		lastIdx, err := l.storage.LastIndex()
-		if err != nil {
-			panic(err)
-		}
-
-		return lastIdx
+		return l.dummy
 	}
 	// Your Code Here (2A).
 	return l.entries[len(l.entries)-1].Index
@@ -180,18 +191,19 @@ func (l *RaftLog) FirstIndex() uint64 {
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
+	if i == l.dummy {
+		return l.dummyTerm, nil
+	}
+
 	// Your Code Here (2A).
-	if i <= l.stabled {
-		return l.storage.Term(i)
-	}
-
 	// check if in mem log
-	if len(l.entries) == 0 ||
-		(i-l.entries[0].Index) >= uint64(len(l.entries)) {
-		return 0, ErrUnavailable
+	if len(l.entries) != 0 &&
+		(i-l.entries[0].Index) < uint64(len(l.entries)) {
+		return l.entries[i-l.entries[0].Index].Term, nil
 	}
 
-	return l.entries[i-l.entries[0].Index].Term, nil
+	// then check disk
+	return l.storage.Term(i)
 }
 
 func (l *RaftLog) LogRange(lo, hi uint64) []*pb.Entry {

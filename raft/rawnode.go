@@ -241,6 +241,10 @@ func (rn *RawNode) Advance(rd Ready) {
 
 	// do log compact in memory
 	rn.Raft.RaftLog.maybeCompact()
+
+	if !IsEmptySnap(&rd.Snapshot) {
+		rn.Raft.RaftLog.pendingSnapshot = nil
+	}
 }
 
 // GetProgress return the Progress of this node and its peers, if this

@@ -515,8 +515,8 @@ func (r *Raft) sendAppend(to uint64) bool {
 func (r *Raft) send(to uint64, msgType pb.MessageType) {
 	nextId := r.Prs[to].Next
 
-	log.Infof("node {%d}, send to {%d} nextIdx {%d}, first {%d}",
-		r.id, to, nextId, r.RaftLog.FirstIndex())
+	// log.Infof("node {%d}, send to {%d} nextIdx {%d}, first {%d}",
+	// 	r.id, to, nextId, r.RaftLog.FirstIndex())
 
 	if nextId < r.RaftLog.FirstIndex() {
 		r.sendSnapshot(to)
@@ -534,7 +534,7 @@ func (r *Raft) send(to uint64, msgType pb.MessageType) {
 	prevLogTerm, err := r.RaftLog.Term(prevLogIdx)
 	// log.Infof("peer {%d}, send to {%d} prevLogIdx {%d}, prevlogterm {%d}", r.id, to, prevLogIdx, prevLogTerm)
 	if err != nil {
-		fmt.Println(prevLogIdx)
+		fmt.Println(prevLogIdx, r.RaftLog.entries)
 		panic(err)
 	}
 
@@ -951,14 +951,19 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 
 	r.becomeFollower(m.Term, m.From)
 
-	r.RaftLog.applied = m.Index
-	r.RaftLog.committed = m.Index
-	r.RaftLog.stabled = m.Index
-	r.RaftLog.entries = make([]pb.Entry, 0)
+	r.RaftLog.dummy = meta.Index
+	r.RaftLog.dummyTerm = meta.Term
 
+	r.RaftLog.applied = meta.Index
+	r.RaftLog.committed = meta.Index
+	r.RaftLog.stabled = meta.Index
+	r.RaftLog.entries = make([]pb.Entry, 0)
 	r.RaftLog.pendingSnapshot = m.Snapshot
 
 	// init nodes
+	r.peers = m.Snapshot.Metadata.ConfState.Nodes
+	r.initProgress(r.RaftLog.LastIndex() + 1)
+
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
