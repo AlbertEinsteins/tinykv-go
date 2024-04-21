@@ -358,10 +358,19 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, error) {
 	// Hint: you may call `Append()` and `ApplySnapshot()` in this function
 	// Your Code Here (2B/2C).
-	writeBatch := new(engine_util.WriteBatch)
-
+	raftWB := new(engine_util.WriteBatch)
+	kvWB := new(engine_util.WriteBatch)
 	var applySnapResult *ApplySnapResult
-	if err := ps.Append(ready.Entries, writeBatch); err != nil {
+	var err error
+
+	if !raft.IsEmptySnap(&ready.Snapshot) {
+		applySnapResult, err = ps.ApplySnapshot(&ready.Snapshot, kvWB, raftWB)
+		if err != nil {
+			log.Panic(err)
+		}
+	}
+
+	if err := ps.Append(ready.Entries, raftWB); err != nil {
 		log.Panic(err)
 	}
 
@@ -370,12 +379,12 @@ func (ps *PeerStorage) SaveReadyState(ready *raft.Ready) (*ApplySnapResult, erro
 		ps.raftState.HardState = &ready.HardState
 	}
 
-	if err := writeBatch.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
+	if err := raftWB.SetMeta(meta.RaftStateKey(ps.region.Id), ps.raftState); err != nil {
 		log.Panic(err)
 	}
 
 	// save to storage
-	if err := writeBatch.WriteToDB(ps.Engines.Raft); err != nil {
+	if err := raftWB.WriteToDB(ps.Engines.Raft); err != nil {
 		log.Panic(err)
 	}
 

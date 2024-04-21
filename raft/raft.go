@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sort"
 
@@ -355,7 +356,10 @@ func (r *Raft) handleMsgFollower(m pb.Message) {
 		r.handleAppendEntries(m)
 	} else if m.MsgType == pb.MessageType_MsgHeartbeat {
 		r.handleHeartbeat(m)
+	} else if m.MsgType == pb.MessageType_MsgSnapshot {
+		r.handleSnapshot(m)
 	}
+
 }
 
 func (r *Raft) handleMsgLeader(m pb.Message) {
@@ -387,6 +391,8 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 		r.handleHeartbeat(m)
 	} else if m.MsgType == pb.MessageType_MsgAppend {
 		r.handleAppendEntries(m)
+	} else if m.MsgType == pb.MessageType_MsgSnapshot {
+		r.handleSnapshot(m)
 	}
 }
 
@@ -509,13 +515,16 @@ func (r *Raft) sendAppend(to uint64) bool {
 func (r *Raft) send(to uint64, msgType pb.MessageType) {
 	nextId := r.Prs[to].Next
 
+	log.Infof("node {%d}, send to {%d} nextIdx {%d}, first {%d}",
+		r.id, to, nextId, r.RaftLog.FirstIndex())
+
+	if nextId < r.RaftLog.FirstIndex() {
+		r.sendSnapshot(to)
+		return
+	}
+
 	entries := make([]*pb.Entry, 0)
 	if msgType != pb.MessageType_MsgHeartbeat {
-		if nextId < r.RaftLog.FirstIndex() {
-			r.sendSnapshot(to)
-			return
-		}
-
 		entries = append(entries, r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)...)
 	} else {
 		entries = nil // must be nil, could not be a empty slice
@@ -525,6 +534,7 @@ func (r *Raft) send(to uint64, msgType pb.MessageType) {
 	prevLogTerm, err := r.RaftLog.Term(prevLogIdx)
 	// log.Infof("peer {%d}, send to {%d} prevLogIdx {%d}, prevlogterm {%d}", r.id, to, prevLogIdx, prevLogTerm)
 	if err != nil {
+		fmt.Println(prevLogIdx)
 		panic(err)
 	}
 
@@ -563,6 +573,7 @@ func (r *Raft) sendSnapshot(to uint64) {
 		return
 	}
 
+	log.Infof("node-[%d] start to send to node-[%d] snapshot", r.id, to)
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType:  pb.MessageType_MsgSnapshot,
 		From:     r.id,
@@ -691,9 +702,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 
-	if m.Term >= r.Term {
-		r.becomeFollower(m.Term, m.From)
-	}
+	r.becomeFollower(m.Term, m.From)
 
 	prevLogIndex := m.Index
 	prevLogTerm := m.LogTerm
@@ -860,9 +869,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		return
 	}
 
-	if m.Term >= r.Term {
-		r.becomeFollower(m.Term, m.From)
-	}
+	r.becomeFollower(m.Term, m.From)
 
 	prevLogIndex := m.Index
 	prevLogTerm := m.LogTerm
@@ -919,6 +926,45 @@ func (r *Raft) handleHeartBeatResponse(m pb.Message) {
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
 	log.Infof("node-[%d] receive a snapshot request", r.id)
+
+	meta := m.Snapshot.Metadata
+	if m.Term < r.Term {
+		// drop
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      m.From,
+			Reject:  true,
+		})
+		return
+	}
+
+	if r.RaftLog.committed >= meta.Index { // cur node commited
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      m.From,
+			Reject:  true,
+		})
+		return
+	}
+
+	r.becomeFollower(m.Term, m.From)
+
+	r.RaftLog.applied = m.Index
+	r.RaftLog.committed = m.Index
+	r.RaftLog.stabled = m.Index
+	r.RaftLog.entries = make([]pb.Entry, 0)
+
+	r.RaftLog.pendingSnapshot = m.Snapshot
+
+	// init nodes
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MessageType_MsgAppendResponse,
+		From:    r.id,
+		To:      m.From,
+		Index:   m.Index,
+	})
 }
 
 // addNode add a new node to raft group

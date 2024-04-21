@@ -176,6 +176,9 @@ func (rn *RawNode) Ready() Ready {
 		ready.HardState = curHardState
 	}
 
+	if rn.Raft.RaftLog.pendingSnapshot != nil {
+		ready.Snapshot = *rn.Raft.RaftLog.pendingSnapshot
+	}
 	return ready
 }
 

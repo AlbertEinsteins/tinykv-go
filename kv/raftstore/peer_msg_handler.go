@@ -189,7 +189,6 @@ func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb
 }
 
 func (d *peerMsgHandler) processAdminRequest(adminReq *raft_cmdpb.AdminRequest, ent eraftpb.Entry) {
-
 	switch adminReq.CmdType {
 	case raft_cmdpb.AdminCmdType_CompactLog:
 		compactReq := adminReq.CompactLog

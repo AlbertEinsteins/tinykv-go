@@ -15,6 +15,8 @@
 package raft
 
 import (
+	"fmt"
+
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -102,9 +104,12 @@ func (l *RaftLog) maybeCompact() {
 	truncatedIndex, _ := l.storage.FirstIndex()
 	offset := l.entries[0].Index
 
-	// truncated entries to [:truncatedIndex], excludes truncatedIndex
-	if truncatedIndex > offset {
+	//delete entries [:truncatedIndex], excludes truncatedIndex
+	if truncatedIndex >= offset {
 		remainEntries := l.entries[truncatedIndex-offset:]
+		fmt.Printf("truncate %d, offset %d, remain %v\n", truncatedIndex, offset,
+			remainEntries[:1])
+
 		l.entries = make([]pb.Entry, 0)
 		l.entries = append(l.entries, remainEntries...)
 	}
