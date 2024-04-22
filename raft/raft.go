@@ -370,6 +370,8 @@ func (r *Raft) handleMsgFollower(m pb.Message) {
 		r.handleHeartbeat(m)
 	} else if m.MsgType == pb.MessageType_MsgSnapshot {
 		r.handleSnapshot(m)
+	} else if m.MsgType == pb.MessageType_MsgTimeoutNow {
+		r.startElectionAtOnce(m)
 	}
 
 }
@@ -389,6 +391,8 @@ func (r *Raft) handleMsgLeader(m pb.Message) {
 		r.handleHeartbeat(m)
 	} else if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
 		r.handleHeartBeatResponse(m)
+	} else if m.MsgType == pb.MessageType_MsgTransferLeader {
+		r.handleLeaderTransfer(m)
 	}
 }
 
@@ -409,6 +413,14 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 }
 
 // ================ operation function ======================
+func (r *Raft) startElectionAtOnce(m pb.Message) {
+
+}
+
+func (r *Raft) handleLeaderTransfer(m pb.Message) {
+
+}
+
 func (r *Raft) handlePropose(m pb.Message) {
 	log.Debugf("node-[%d] start to propose", r.id)
 
@@ -987,9 +999,40 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 // addNode add a new node to raft group
 func (r *Raft) addNode(id uint64) {
 	// Your Code Here (3A).
+	peers := r.peers
+
+	// check exists
+	for _, peer := range peers {
+		if peer == id {
+			return
+		}
+	}
+
+	r.peers = append(r.peers, id)
+	r.Prs[id] = &Progress{
+		Match: 0,
+		Next:  r.RaftLog.LastIndex() + 1,
+	}
 }
 
 // removeNode remove a node from raft group
 func (r *Raft) removeNode(id uint64) {
 	// Your Code Here (3A).
+	peers := r.peers
+	originSize := len(peers)
+
+	start := 0
+	for _, peer := range peers {
+		if peer != id {
+			peers[start] = peer
+			start++
+		}
+	}
+
+	r.peers = peers[:start]
+
+	if start != originSize { // remove any element
+		delete(r.Prs, id)
+	}
+
 }
