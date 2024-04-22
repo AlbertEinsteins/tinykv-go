@@ -192,7 +192,7 @@ func (d *peerMsgHandler) processAdminRequest(adminReq *raft_cmdpb.AdminRequest, 
 	switch adminReq.CmdType {
 	case raft_cmdpb.AdminCmdType_CompactLog:
 		compactReq := adminReq.CompactLog
-		log.Infof("peer-[%d] use schedule task to compact log, truncated idx {%d}", d.PeerId(), compactReq.CompactIndex)
+		// log.Infof("peer-[%d] use schedule task to compact log, truncated idx {%d}", d.PeerId(), compactReq.CompactIndex)
 
 		if compactReq.CompactIndex > d.peerStorage.truncatedIndex() {
 			truncatedState := d.peerStorage.applyState.TruncatedState
@@ -293,8 +293,8 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	if msg.Requests != nil {
 		d.propocessClientMsg(msg, cb)
 	} else { // handle admin requests
-		fmt.Println(msg.AdminRequest)
-		log.Infof("store-[%d], peer-[%d], receive a admin request msg", d.storeID(), d.PeerId())
+		// fmt.Println(msg.AdminRequest)
+		// log.Infof("store-[%d], peer-[%d], receive a admin request msg", d.storeID(), d.PeerId())
 		d.processAdminMsg(msg)
 	}
 }

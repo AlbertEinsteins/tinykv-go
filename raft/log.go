@@ -15,8 +15,6 @@
 package raft
 
 import (
-	"log"
-
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -115,6 +113,8 @@ func (l *RaftLog) maybeCompact() {
 		l.entries = make([]pb.Entry, 0)
 		l.entries = append(l.entries, remainEntries...)
 	}
+	l.dummy = truncatedIndex - 1
+	l.dummyTerm, _ = l.Term(l.dummy)
 }
 
 // allEntries return all the entries not compacted.
@@ -154,7 +154,7 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	start := l.applied + 1 - offset
 	end := l.committed - offset
 
-	// fmt.Println(offset, l.applied, l.committed, l.entries[len(l.entries)-1].Index)
+	// fmt.Println(offset, l.applied, l.committed)
 	ents = append(ents, l.entries[start:end+1]...)
 	return ents
 }
@@ -162,13 +162,10 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	if len(l.entries) == 0 {
-		// get from storage
-		lastIdx, err := l.storage.LastIndex()
-		if err != nil {
-			log.Panic(err)
-		}
-		return lastIdx
+		// get from latest log in storage
+		return l.dummy
 	}
+
 	// Your Code Here (2A).
 	return l.entries[len(l.entries)-1].Index
 }
@@ -182,6 +179,9 @@ func (l *RaftLog) FirstIndex() uint64 {
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
+	if i == l.dummy {
+		return l.dummyTerm, nil
+	}
 
 	// Your Code Here (2A).
 	// check if in mem log

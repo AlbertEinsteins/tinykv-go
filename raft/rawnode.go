@@ -150,9 +150,9 @@ func (rn *RawNode) Step(m pb.Message) error {
 
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
-	if !rn.HasReady() {
-		return rn.Ready()
-	}
+	// if !rn.HasReady() {
+	// 	return Ready{}
+	// }
 
 	// Your Code Here (2A).
 	unstableEntries := rn.Raft.RaftLog.unstableEntries()

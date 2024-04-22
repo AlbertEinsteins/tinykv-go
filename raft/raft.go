@@ -193,18 +193,25 @@ func newRaft(c *Config) *Raft {
 	if len(c.peers) == 0 {
 		raft.peers = confState.Nodes
 	}
-	// snapshot, err := c.Storage.Snapshot()
-	// if err == nil {
-	// 	raft.RaftLog.applied = snapshot.Metadata.Index
-	// }
 
-	fmt.Println(hardState)
+	// fmt.Println(hardState)
 	raft.becomeFollower(hardState.Term, hardState.Vote)
 	raft.RaftLog.committed = hardState.Commit
-	raft.RaftLog.applied = max(c.Applied, raft.RaftLog.applied)
 
-	log.Infof("raft-%d restart with last index %d, commited %d, applied %d",
-		raft.id, raft.RaftLog.LastIndex(), raft.RaftLog.committed, raft.RaftLog.applied)
+	// Restore applied from Snapshot or Config
+	snap, err := c.Storage.Snapshot()
+	if err == nil {
+		raft.RaftLog.dummy = snap.Metadata.Index
+		raft.RaftLog.dummyTerm = snap.Metadata.Term
+		raft.RaftLog.applied = snap.Metadata.Index
+	} else {
+		raft.RaftLog.applied = c.Applied
+		raft.RaftLog.dummy = c.Applied
+		raft.RaftLog.dummyTerm = hardState.Term
+	}
+
+	// log.Infof("raft-%d restart with last index %d, commited %d, applied %d",
+	// 	raft.id, raft.RaftLog.LastIndex(), raft.RaftLog.committed, raft.RaftLog.applied)
 	raft.initProgress(raft.RaftLog.LastIndex() + 1)
 	return raft
 }
@@ -311,6 +318,7 @@ func (r *Raft) becomeLeader() {
 	noopEntry := r.noOpEntry()
 	noopEntry.Term = r.Term
 	noopEntry.Index = r.RaftLog.LastIndex() + 1
+	// fmt.Println("leader commit no-op entry, ", r.RaftLog.LastIndex())
 
 	r.RaftLog.entries = append(r.RaftLog.entries, *noopEntry)
 	r.initProgress(r.RaftLog.LastIndex())
@@ -573,11 +581,11 @@ func (r *Raft) sendSnapshot(to uint64) {
 	// get snapshot
 	snapshot, err := r.RaftLog.storage.Snapshot()
 	if err != nil {
-		log.Warnf("node-[%d] snapshot is not ready.............", r.id)
+		// log.Warnf("node-[%d] snapshot is not ready.............", r.id)
 		return
 	}
 
-	log.Infof("node-[%d] start to send to node-[%d] snapshot", r.id, to)
+	// log.Infof("node-[%d] start to send to node-[%d] snapshot", r.id, to)
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType:  pb.MessageType_MsgSnapshot,
 		From:     r.id,
