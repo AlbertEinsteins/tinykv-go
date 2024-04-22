@@ -15,7 +15,6 @@
 package raft
 
 import (
-	"fmt"
 	"log"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
@@ -151,24 +150,11 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
 	offset := l.entries[0].Index
 
-	// if start <= offset, get from storage, then with mem
-	if l.applied+1 < offset {
-		entriesInStorage, err := l.storage.Entries(l.applied, offset-1)
-		if err != nil {
-			log.Panic(err)
-		}
-		ents = append(ents, entriesInStorage...)
-	}
-
 	// others, get from mem
-	start := offset
-	if l.applied+1 >= offset {
-		start = l.applied + 1 - offset
-	}
-
+	start := l.applied + 1 - offset
 	end := l.committed - offset
 
-	fmt.Println(offset, l.applied, l.committed, l.entries[len(l.entries)-1].Index)
+	// fmt.Println(offset, l.applied, l.committed, l.entries[len(l.entries)-1].Index)
 	ents = append(ents, l.entries[start:end+1]...)
 	return ents
 }
@@ -176,7 +162,12 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	if len(l.entries) == 0 {
-		return l.dummy
+		// get from storage
+		lastIdx, err := l.storage.LastIndex()
+		if err != nil {
+			log.Panic(err)
+		}
+		return lastIdx
 	}
 	// Your Code Here (2A).
 	return l.entries[len(l.entries)-1].Index
@@ -191,13 +182,11 @@ func (l *RaftLog) FirstIndex() uint64 {
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
-	if i == l.dummy {
-		return l.dummyTerm, nil
-	}
 
 	// Your Code Here (2A).
 	// check if in mem log
 	if len(l.entries) != 0 &&
+		(i >= l.entries[0].Index) &&
 		(i-l.entries[0].Index) < uint64(len(l.entries)) {
 		return l.entries[i-l.entries[0].Index].Term, nil
 	}

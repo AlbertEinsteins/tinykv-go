@@ -193,11 +193,15 @@ func newRaft(c *Config) *Raft {
 	if len(c.peers) == 0 {
 		raft.peers = confState.Nodes
 	}
+	// snapshot, err := c.Storage.Snapshot()
+	// if err == nil {
+	// 	raft.RaftLog.applied = snapshot.Metadata.Index
+	// }
 
+	fmt.Println(hardState)
 	raft.becomeFollower(hardState.Term, hardState.Vote)
 	raft.RaftLog.committed = hardState.Commit
-
-	raft.RaftLog.applied = c.Applied
+	raft.RaftLog.applied = max(c.Applied, raft.RaftLog.applied)
 
 	log.Infof("raft-%d restart with last index %d, commited %d, applied %d",
 		raft.id, raft.RaftLog.LastIndex(), raft.RaftLog.committed, raft.RaftLog.applied)

@@ -127,6 +127,7 @@ func (ps *PeerStorage) Entries(low, high uint64) ([]eraftpb.Entry, error) {
 }
 
 func (ps *PeerStorage) Term(idx uint64) (uint64, error) {
+
 	if idx == ps.truncatedIndex() {
 		return ps.truncatedTerm(), nil
 	}
@@ -141,7 +142,6 @@ func (ps *PeerStorage) Term(idx uint64) (uint64, error) {
 		return 0, err
 	}
 
-	// fmt.Printf("access idx {%d}, term {%d} %v\n", idx, entry.Term, entry)
 	return entry.Term, nil
 }
 
