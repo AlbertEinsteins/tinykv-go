@@ -122,23 +122,9 @@ func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb
 
 	if cmdReq.AdminRequest != nil {
 		d.processAdminRequest(cmdReq.AdminRequest, ent)
-		return
-	}
-
-	//exec every cmd
-	for _, clientReq := range cmdReq.Requests {
-		switch clientReq.CmdType {
-		case raft_cmdpb.CmdType_Put:
-			putReq := clientReq.Put
-			// append to writebacth
-			wb.SetCF(putReq.Cf, putReq.Key, putReq.Value)
-
-		case raft_cmdpb.CmdType_Delete:
-			delReq := clientReq.Delete
-			// set val to nil, to delete key
-			wb.SetCF(delReq.Cf, delReq.Key, nil)
-		}
-
+	} else {
+		//exec every cmd
+		d.processRaftRequest(wb, &cmdReq)
 	}
 
 	if !d.IsLeader() || term != d.Term() { // non-leader
@@ -150,42 +136,74 @@ func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb
 			Header: &raft_cmdpb.RaftResponseHeader{},
 		}
 
-		for _, clientReq := range cmdReq.Requests {
-			clientResp := raft_cmdpb.Response{}
-
-			switch clientReq.CmdType {
-			case raft_cmdpb.CmdType_Get:
-				clientResp.CmdType = raft_cmdpb.CmdType_Get
-
-				val, err := engine_util.GetCF(d.ctx.engine.Kv, clientReq.Get.Cf, clientReq.Get.Key)
-				if err != nil {
-					fmt.Println(err)
-				}
-				clientResp.Get = &raft_cmdpb.GetResponse{
-					Value: val,
-				}
-
-			case raft_cmdpb.CmdType_Put:
-				clientResp.CmdType = raft_cmdpb.CmdType_Put
-				clientResp.Put = &raft_cmdpb.PutResponse{}
-			case raft_cmdpb.CmdType_Delete:
-				clientResp.CmdType = raft_cmdpb.CmdType_Delete
-				clientResp.Delete = &raft_cmdpb.DeleteResponse{}
-			case raft_cmdpb.CmdType_Snap:
-				// fmt.Println("receive snap")
-				clientResp.CmdType = raft_cmdpb.CmdType_Snap
-				clientResp.Snap = &raft_cmdpb.SnapResponse{
-					Region: d.Region(),
-				}
-				p.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
-			}
-
-			resp.Responses = append(resp.Responses, &clientResp)
+		if cmdReq.AdminRequest == nil {
+			d.postProcessRaftProposal(p, &cmdReq, &resp)
+		} else {
+			d.postProcessAdaminProposal(p, &cmdReq, &resp)
 		}
 
 		p.cb.Done(&resp)
 	})
 
+}
+
+func (d *peerMsgHandler) postProcessRaftProposal(p *proposal, cmdReq *raft_cmdpb.RaftCmdRequest,
+	resp *raft_cmdpb.RaftCmdResponse) {
+	for _, clientReq := range cmdReq.Requests {
+		clientResp := raft_cmdpb.Response{}
+
+		switch clientReq.CmdType {
+		case raft_cmdpb.CmdType_Get:
+			clientResp.CmdType = raft_cmdpb.CmdType_Get
+
+			val, err := engine_util.GetCF(d.ctx.engine.Kv, clientReq.Get.Cf, clientReq.Get.Key)
+			if err != nil {
+				fmt.Println(err)
+			}
+			clientResp.Get = &raft_cmdpb.GetResponse{
+				Value: val,
+			}
+
+		case raft_cmdpb.CmdType_Put:
+			clientResp.CmdType = raft_cmdpb.CmdType_Put
+			clientResp.Put = &raft_cmdpb.PutResponse{}
+		case raft_cmdpb.CmdType_Delete:
+			clientResp.CmdType = raft_cmdpb.CmdType_Delete
+			clientResp.Delete = &raft_cmdpb.DeleteResponse{}
+		case raft_cmdpb.CmdType_Snap:
+			// fmt.Println("receive snap")
+			clientResp.CmdType = raft_cmdpb.CmdType_Snap
+			clientResp.Snap = &raft_cmdpb.SnapResponse{
+				Region: d.Region(),
+			}
+			p.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
+		}
+
+		resp.Responses = append(resp.Responses, &clientResp)
+	}
+}
+
+func (d *peerMsgHandler) postProcessAdaminProposal(p *proposal, cmdReq *raft_cmdpb.RaftCmdRequest,
+	resp *raft_cmdpb.RaftCmdResponse) {
+
+	adminResp := raft_cmdpb.AdminResponse{}
+	switch cmdReq.AdminRequest.CmdType {
+	case raft_cmdpb.AdminCmdType_CompactLog:
+		// log.Infof("peer-[%d] use schedule task to compact log, truncated idx {%d}", d.PeerId(), compactReq.CompactIndex)
+
+	case raft_cmdpb.AdminCmdType_InvalidAdmin:
+		adminResp.CmdType = raft_cmdpb.AdminCmdType_InvalidAdmin
+	case raft_cmdpb.AdminCmdType_ChangePeer:
+		adminResp.CmdType = raft_cmdpb.AdminCmdType_ChangePeer
+	case raft_cmdpb.AdminCmdType_TransferLeader:
+		adminResp.CmdType = raft_cmdpb.AdminCmdType_TransferLeader
+		adminResp.TransferLeader = &raft_cmdpb.TransferLeaderResponse{}
+	case raft_cmdpb.AdminCmdType_Split:
+		adminResp.CmdType = raft_cmdpb.AdminCmdType_Split
+
+	}
+
+	resp.AdminResponse = &adminResp
 }
 
 func (d *peerMsgHandler) processAdminRequest(adminReq *raft_cmdpb.AdminRequest, ent eraftpb.Entry) {
@@ -204,10 +222,43 @@ func (d *peerMsgHandler) processAdminRequest(adminReq *raft_cmdpb.AdminRequest, 
 
 	case raft_cmdpb.AdminCmdType_InvalidAdmin:
 	case raft_cmdpb.AdminCmdType_ChangePeer:
+		changePeerReq := adminReq.ChangePeer
+
+		if changePeerReq.ChangeType == eraftpb.ConfChangeType_AddNode {
+
+		} else { // Remove
+
+		}
+
+		d.peerStorage.region.RegionEpoch.ConfVer++
+
+		d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{
+			ChangeType: changePeerReq.ChangeType,
+			NodeId:     changePeerReq.Peer.Id,
+		})
+
 	case raft_cmdpb.AdminCmdType_TransferLeader:
+		transferLeaderReq := adminReq.TransferLeader
+		d.RaftGroup.TransferLeader(transferLeaderReq.Peer.Id)
 	case raft_cmdpb.AdminCmdType_Split:
 	}
 
+}
+
+func (d *peerMsgHandler) processRaftRequest(wb *engine_util.WriteBatch, raftReq *raft_cmdpb.RaftCmdRequest) {
+	for _, clientReq := range raftReq.Requests {
+		switch clientReq.CmdType {
+		case raft_cmdpb.CmdType_Put:
+			putReq := clientReq.Put
+			// append to writebacth
+			wb.SetCF(putReq.Cf, putReq.Key, putReq.Value)
+
+		case raft_cmdpb.CmdType_Delete:
+			delReq := clientReq.Delete
+			// set val to nil, to delete key
+			wb.SetCF(delReq.Cf, delReq.Key, nil)
+		}
+	}
 }
 
 func (d *peerMsgHandler) scheduleSnapshotTask(compactIndex uint64) {
@@ -290,13 +341,7 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
-	if msg.Requests != nil {
-		d.propocessClientMsg(msg, cb)
-	} else { // handle admin requests
-		// fmt.Println(msg.AdminRequest)
-		// log.Infof("store-[%d], peer-[%d], receive a admin request msg", d.storeID(), d.PeerId())
-		d.processAdminMsg(msg)
-	}
+	d.propocessClientMsg(msg, cb)
 }
 
 func (d *peerMsgHandler) propocessClientMsg(msg *raft_cmdpb.RaftCmdRequest, cb *message.Callback) {
@@ -308,18 +353,6 @@ func (d *peerMsgHandler) propocessClientMsg(msg *raft_cmdpb.RaftCmdRequest, cb *
 
 	// log.Infof("peer-%d process client msg %v", d.PeerId(), d.proposals)
 
-	data, err := msg.Marshal()
-	if err != nil {
-		log.Panic(err)
-	}
-
-	err = d.RaftGroup.Propose(data)
-	if err != nil {
-		log.Panic(err)
-	}
-}
-
-func (d *peerMsgHandler) processAdminMsg(msg *raft_cmdpb.RaftCmdRequest) {
 	data, err := msg.Marshal()
 	if err != nil {
 		log.Panic(err)
