@@ -312,6 +312,7 @@ func (r *Raft) becomeLeader() {
 	// NOTE: Leader should propose a noop entry on its term
 	log.Infof("node-[%d] turns to leader at term {%d}", r.id, r.Term)
 	r.State = StateLeader
+	r.Lead = r.id
 	r.electionElapsed = 0
 
 	// append no-op entry
@@ -371,7 +372,9 @@ func (r *Raft) handleMsgFollower(m pb.Message) {
 	} else if m.MsgType == pb.MessageType_MsgSnapshot {
 		r.handleSnapshot(m)
 	} else if m.MsgType == pb.MessageType_MsgTimeoutNow {
-		r.startElectionAtOnce(m)
+		r.handleMsgTimeout(m)
+	} else if m.MsgType == pb.MessageType_MsgTransferLeader {
+		r.handleLeaderTransfer(m)
 	}
 
 }
@@ -413,12 +416,69 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 }
 
 // ================ operation function ======================
-func (r *Raft) startElectionAtOnce(m pb.Message) {
+func (r *Raft) handleMsgTimeout(m pb.Message) {
+	log.Infof("node-[%d] in term {%d} receive a timeout msg from leader {%d}", r.id, r.Term, m.Term)
+	if m.Term < r.Term || !r.checkInGroup(r.id) {
+		return
+	}
 
+	r.startElection()
+}
+
+func (r *Raft) checkInGroup(peerId uint64) bool {
+	for _, peer := range r.peers {
+		if peer == peerId {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Raft) handleLeaderTransfer(m pb.Message) {
+	log.Infof("node-[%d] receive a leader transfer to {%d}", r.id, m.From)
+	// if m.Term < r.Term {
+	// 	log.Warnf("node-[%d] receive a old leader transfer to {%d}", r.id, m.From)
+	// 	return
+	// }
 
+	// leader check the transfee's qualification
+	if r.State == StateLeader {
+		r.leadTransferee = m.From
+
+		// check m.from exists
+		if _, ok := r.Prs[m.From]; !ok {
+			return
+		}
+		if !r.checkQualification(m.From) {
+			r.sendAppend(m.From)
+			return
+		}
+
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgTimeoutNow,
+			From:    r.id,
+			To:      m.From,
+			Term:    r.Term,
+		})
+	} else if r.State == StateFollower {
+		// redirect leader transfer msg to leader
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgTransferLeader,
+			From:    r.id,
+			To:      r.Lead,
+			Term:    r.Term,
+		})
+	} else {
+		fmt.Println("eRRRRRRRR")
+	}
+}
+
+func (r *Raft) checkQualification(peer uint64) bool {
+	peerMatch := r.Prs[peer].Match
+	if peerMatch >= r.RaftLog.LastIndex() {
+		return true
+	}
+	return false
 }
 
 func (r *Raft) handlePropose(m pb.Message) {
@@ -429,9 +489,10 @@ func (r *Raft) handlePropose(m pb.Message) {
 	proposeEntries := make([]pb.Entry, 0)
 	for idx, entry := range m.Entries {
 		log := pb.Entry{
-			Term:  r.Term,
-			Index: lastLogIdx + 1 + uint64(idx),
-			Data:  entry.Data,
+			Term:      r.Term,
+			Index:     lastLogIdx + 1 + uint64(idx),
+			Data:      entry.Data,
+			EntryType: entry.EntryType,
 		}
 		proposeEntries = append(proposeEntries, log)
 	}
@@ -627,6 +688,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		r.becomeFollower(m.Term, 0)
 		r.Vote = 0
 		r.Term = m.Term
+		r.leadTransferee = 0
 	}
 
 	isVote := r.canVoteFor(m.From, m.LogTerm, m.Index)
@@ -668,6 +730,11 @@ func (r *Raft) handleRequestVoteResponse(m pb.Message) {
 
 	if m.Term > r.Term { // receive higher term response, turn to follower
 		r.becomeFollower(m.Term, 0)
+		return
+	}
+
+	// check node in group
+	if !r.checkInGroup(r.id) {
 		return
 	}
 
@@ -825,7 +892,7 @@ func (r *Raft) conflictAt(prevLogIdx, prevLogTerm uint64) bool {
 }
 
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
-	log.Debugf("node-[%d] in term {%d} receive a append response in term {%d} from node-[%d]",
+	log.Infof("node-[%d] in term {%d} receive a append response in term {%d} from node-[%d]",
 		r.id, r.Term, m.Term, m.From)
 
 	if m.Term < r.Term {
@@ -842,6 +909,17 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		matchIdx := max(r.Prs[m.From].Match, m.Index)
 		r.updateProcess(m.From, matchIdx, matchIdx+1)
 		r.updateCommitIndex()
+
+		// TODO: check up-to-date, then transfer leader
+		if r.leadTransferee == m.From && r.checkQualification(m.From) {
+			// let transferee start elect
+			r.msgs = append(r.msgs, pb.Message{
+				MsgType: pb.MessageType_MsgTimeoutNow,
+				From:    r.id,
+				To:      m.From,
+				Term:    r.Term,
+			})
+		}
 	} else {
 		// conflict entry, retry
 		log.Debugf("node-[%d] in leader state receive a conflict append response from node-{%d}", r.id, m.From)
@@ -852,6 +930,10 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 }
 
 func (r *Raft) updateCommitIndex() {
+	if len(r.Prs) == 0 {
+		return
+	}
+
 	matchCopy := make([]uint64, 0)
 	for _, status := range r.Prs { // collect match index
 		matchCopy = append(matchCopy, status.Match)
@@ -1033,6 +1115,8 @@ func (r *Raft) removeNode(id uint64) {
 
 	if start != originSize { // remove any element
 		delete(r.Prs, id)
+		// check if only exists one node
+		r.updateCommitIndex()
 	}
 
 }
