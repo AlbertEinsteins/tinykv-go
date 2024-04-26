@@ -190,7 +190,8 @@ func (d *peerMsgHandler) postProcessAdaminProposal(p *proposal, cmdReq *raft_cmd
 	switch cmdReq.AdminRequest.CmdType {
 	case raft_cmdpb.AdminCmdType_CompactLog:
 		// log.Infof("peer-[%d] use schedule task to compact log, truncated idx {%d}", d.PeerId(), compactReq.CompactIndex)
-
+		adminResp.CmdType = raft_cmdpb.AdminCmdType_CompactLog
+		adminResp.CompactLog = &raft_cmdpb.CompactLogResponse{}
 	case raft_cmdpb.AdminCmdType_InvalidAdmin:
 		adminResp.CmdType = raft_cmdpb.AdminCmdType_InvalidAdmin
 	case raft_cmdpb.AdminCmdType_ChangePeer:
@@ -341,6 +342,16 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		return
 	}
 	// Your Code Here (2B).
+	// if in leader transfer, reject request
+	if d.RaftGroup.IsOnLeaderTransfer() {
+		errResp := ErrResp(errors.New("raftgroup is in leader transfering"))
+		errResp.AdminResponse = &raft_cmdpb.AdminResponse{
+			CmdType: raft_cmdpb.AdminCmdType_TransferLeader,
+		}
+		cb.Done(errResp)
+		return
+	}
+
 	d.propocessClientMsg(msg, cb)
 }
 

@@ -247,6 +247,10 @@ func (rn *RawNode) Advance(rd Ready) {
 	}
 }
 
+func (rn *RawNode) IsOnLeaderTransfer() bool {
+	return rn.Raft.leadTransferee != 0
+}
+
 // GetProgress return the Progress of this node and its peers, if this
 // node is leader.
 func (rn *RawNode) GetProgress() map[uint64]Progress {

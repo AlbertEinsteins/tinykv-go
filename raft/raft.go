@@ -412,12 +412,14 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 		r.handleAppendEntries(m)
 	} else if m.MsgType == pb.MessageType_MsgSnapshot {
 		r.handleSnapshot(m)
+	} else if m.MsgType == pb.MessageType_MsgTimeoutNow {
+		fmt.Println("xxx")
 	}
 }
 
 // ================ operation function ======================
 func (r *Raft) handleMsgTimeout(m pb.Message) {
-	log.Infof("node-[%d] in term {%d} receive a timeout msg from leader {%d}", r.id, r.Term, m.Term)
+	fmt.Printf("node-[%d] in term {%d} receive a timeout msg from leader {%d}", r.id, r.Term, m.From)
 	if m.Term < r.Term || !r.checkInGroup(r.id) {
 		return
 	}
@@ -435,7 +437,7 @@ func (r *Raft) checkInGroup(peerId uint64) bool {
 }
 
 func (r *Raft) handleLeaderTransfer(m pb.Message) {
-	log.Infof("node-[%d] receive a leader transfer to {%d}", r.id, m.From)
+	log.Infof("node-[%d] in term {%d} receive a leader transfer to {%d}", r.id, r.Term, m.From)
 	// if m.Term < r.Term {
 	// 	log.Warnf("node-[%d] receive a old leader transfer to {%d}", r.id, m.From)
 	// 	return
@@ -443,17 +445,20 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 
 	// leader check the transfee's qualification
 	if r.State == StateLeader {
-		r.leadTransferee = m.From
-
 		// check m.from exists
 		if _, ok := r.Prs[m.From]; !ok {
 			return
 		}
+
+		r.leadTransferee = m.From
+
 		if !r.checkQualification(m.From) {
+			fmt.Println("not qualified, wait")
 			r.sendAppend(m.From)
 			return
 		}
 
+		fmt.Printf("leader [%d] send timeout msg to %d\n", r.id, m.From)
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgTimeoutNow,
 			From:    r.id,
@@ -461,13 +466,18 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 			Term:    r.Term,
 		})
 	} else if r.State == StateFollower {
-		// redirect leader transfer msg to leader
-		r.msgs = append(r.msgs, pb.Message{
-			MsgType: pb.MessageType_MsgTransferLeader,
-			From:    r.id,
-			To:      r.Lead,
-			Term:    r.Term,
-		})
+		// redirect leader transfer msg to leader if from is self
+		if m.From == r.id {
+			log.Infof("node-[%d] receive a transfer to {%d}, redirect to {%d}", r.id, m.From, r.Lead)
+
+			r.msgs = append(r.msgs, pb.Message{
+				MsgType: pb.MessageType_MsgTransferLeader,
+				From:    r.id,
+				To:      r.Lead,
+				Term:    r.Term,
+			})
+		}
+
 	} else {
 		fmt.Println("eRRRRRRRR")
 	}
@@ -475,6 +485,8 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 
 func (r *Raft) checkQualification(peer uint64) bool {
 	peerMatch := r.Prs[peer].Match
+	log.Infof("qualification peer-[%d], match {%d}, currrent leader {%d}, logs %v",
+		peer, peerMatch, r.RaftLog.LastIndex(), r.RaftLog.entries)
 	if peerMatch >= r.RaftLog.LastIndex() {
 		return true
 	}
@@ -482,7 +494,7 @@ func (r *Raft) checkQualification(peer uint64) bool {
 }
 
 func (r *Raft) handlePropose(m pb.Message) {
-	log.Debugf("node-[%d] start to propose", r.id)
+	log.Infof("node-[%d] start to propose", r.id)
 
 	// save local
 	lastLogIdx := r.RaftLog.LastIndex()
@@ -531,7 +543,7 @@ func (r *Raft) appendLocally(entries []pb.Entry) {
 
 func (r *Raft) startElection() {
 	r.becomeCandidate()
-	log.Debugf("node-[%d] start to election in term {%d}", r.id, r.Term)
+	log.Infof("node-[%d] start to election in term {%d}", r.id, r.Term)
 
 	r.initVotes()
 	r.Vote = r.id
@@ -670,7 +682,7 @@ func (r *Raft) sendSnapshot(to uint64) {
 
 // handle requestvote rpc request
 func (r *Raft) handleRequestVote(m pb.Message) {
-	log.Debugf("node-[%d] in term {%d} state {%v} receive a vote request in term {%v} from node {%d}",
+	log.Infof("node-[%d] in term {%d} state {%v} receive a vote request in term {%v} from node {%d}",
 		r.id, r.Term, r.State.String(), m.Term, m.From)
 
 	if m.Term < r.Term {
@@ -688,12 +700,12 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 		r.becomeFollower(m.Term, 0)
 		r.Vote = 0
 		r.Term = m.Term
-		r.leadTransferee = 0
 	}
 
 	isVote := r.canVoteFor(m.From, m.LogTerm, m.Index)
 	if isVote {
 		r.Vote = m.From
+		log.Infof("node-[%d] vote for node-{%d}", r.id, m.From)
 	}
 
 	r.msgs = append(r.msgs, pb.Message{
@@ -713,7 +725,7 @@ func (r *Raft) canVoteFor(from, lastLogTerm, lastLogIndex uint64) bool {
 	curLastLogIndex := r.RaftLog.LastIndex()
 	curLastLogTerm, _ := r.RaftLog.Term(curLastLogIndex)
 
-	log.Debugf("node-[%d] <%d,%d>, candidate <%d,%d>", r.id, curLastLogIndex, curLastLogTerm,
+	log.Infof("node-[%d] <%d,%d>, candidate <%d,%d>", r.id, curLastLogIndex, curLastLogTerm,
 		lastLogIndex, lastLogTerm)
 	if lastLogTerm > curLastLogTerm ||
 		(lastLogTerm == curLastLogTerm && lastLogIndex >= curLastLogIndex) {
@@ -913,6 +925,7 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		// TODO: check up-to-date, then transfer leader
 		if r.leadTransferee == m.From && r.checkQualification(m.From) {
 			// let transferee start elect
+			log.Infof("node-[%d] help transferee {%d}, then send timeout to it", r.id, m.From)
 			r.msgs = append(r.msgs, pb.Message{
 				MsgType: pb.MessageType_MsgTimeoutNow,
 				From:    r.id,
@@ -976,6 +989,10 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	}
 
 	r.becomeFollower(m.Term, m.From)
+
+	if r.leadTransferee == m.From {
+		r.leadTransferee = 0
+	}
 
 	prevLogIndex := m.Index
 	prevLogTerm := m.LogTerm
