@@ -419,7 +419,7 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 
 // ================ operation function ======================
 func (r *Raft) handleMsgTimeout(m pb.Message) {
-	fmt.Printf("node-[%d] in term {%d} receive a timeout msg from leader {%d}", r.id, r.Term, m.From)
+	fmt.Printf("node-[%d] in term {%d} receive a timeout msg from leader {%d}\n", r.id, r.Term, m.From)
 	if m.Term < r.Term || !r.checkInGroup(r.id) {
 		return
 	}
@@ -447,6 +447,10 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 	if r.State == StateLeader {
 		// check m.from exists
 		if _, ok := r.Prs[m.From]; !ok {
+			return
+		}
+
+		if m.From == r.id {
 			return
 		}
 
@@ -485,8 +489,8 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 
 func (r *Raft) checkQualification(peer uint64) bool {
 	peerMatch := r.Prs[peer].Match
-	log.Infof("qualification peer-[%d], match {%d}, currrent leader {%d}, logs %v",
-		peer, peerMatch, r.RaftLog.LastIndex(), r.RaftLog.entries)
+	log.Infof("qualification peer-[%d], match {%d}, currrent leader {%d}",
+		peer, peerMatch, r.RaftLog.LastIndex())
 	if peerMatch >= r.RaftLog.LastIndex() {
 		return true
 	}
@@ -806,6 +810,11 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 
 	r.becomeFollower(m.Term, m.From)
+	log.Infof("node-[%d] turns to follower at term {%d}, leader {%d}", r.id, m.Term, m.From)
+	if r.leadTransferee == m.From {
+		log.Infof("node-[%d] receive a ae from {%d} set leadTransferee finished to 0", r.id, m.From)
+		r.leadTransferee = 0
+	}
 
 	prevLogIndex := m.Index
 	prevLogTerm := m.LogTerm
@@ -904,7 +913,7 @@ func (r *Raft) conflictAt(prevLogIdx, prevLogTerm uint64) bool {
 }
 
 func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
-	log.Infof("node-[%d] in term {%d} receive a append response in term {%d} from node-[%d]",
+	log.Debugf("node-[%d] in term {%d} receive a append response in term {%d} from node-[%d]",
 		r.id, r.Term, m.Term, m.From)
 
 	if m.Term < r.Term {
@@ -1022,7 +1031,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 }
 
 func (r *Raft) handleHeartBeatResponse(m pb.Message) {
-	// log.Debugf("node-[%d] receive a heartbeat response from node-[%d] in term {%d}", r.id, m.From, m.Term)
+	// log.Infof("node-[%d] receive a heartbeat response from node-[%d] in term {%d}", r.id, m.From, m.Term)
 	if m.Term < r.Term {
 		return
 	}

@@ -113,43 +113,70 @@ func (d *peerMsgHandler) appplyOrCollect(wb *engine_util.WriteBatch, ent eraftpb
 		return
 	}
 
-	cmdReq := raft_cmdpb.RaftCmdRequest{}
 	_, term := ent.Index, ent.Term
-	err := proto.Unmarshal(ent.Data, &cmdReq)
-	if err != nil {
-		log.Panic(err)
-	}
 
-	if cmdReq.AdminRequest != nil {
-		d.processAdminRequest(cmdReq.AdminRequest, ent)
+	if ent.EntryType == eraftpb.EntryType_EntryConfChange {
+		confChange := eraftpb.ConfChange{}
+		err := proto.Unmarshal(ent.Data, &confChange)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		d.processConfChange(&confChange, ent)
+
+		if !d.IsLeader() || term != d.Term() { // non-leader
+			return
+		}
+
+		d.handleProposal(&ent, func(p *proposal) {
+			resp := raft_cmdpb.RaftCmdResponse{
+				Header: &raft_cmdpb.RaftResponseHeader{},
+			}
+
+			resp.AdminResponse = &raft_cmdpb.AdminResponse{
+				CmdType:    raft_cmdpb.AdminCmdType_ChangePeer,
+				ChangePeer: &raft_cmdpb.ChangePeerResponse{},
+			}
+
+			p.cb.Done(&resp)
+		})
 	} else {
-		//exec every cmd
-		d.processRaftRequest(wb, &cmdReq)
-	}
-
-	if !d.IsLeader() || term != d.Term() { // non-leader
-		return
-	}
-
-	d.handleProposal(&ent, func(p *proposal) {
-		resp := raft_cmdpb.RaftCmdResponse{
-			Header: &raft_cmdpb.RaftResponseHeader{},
+		cmdReq := raft_cmdpb.RaftCmdRequest{}
+		err := proto.Unmarshal(ent.Data, &cmdReq)
+		if err != nil {
+			log.Panic(err)
 		}
 
-		if cmdReq.AdminRequest == nil {
-			d.postProcessRaftProposal(p, &cmdReq, &resp)
+		if cmdReq.AdminRequest != nil {
+			d.processAdminRequest(cmdReq.AdminRequest, ent)
 		} else {
-			d.postProcessAdaminProposal(p, &cmdReq, &resp)
+			d.processRaftRequest(wb, cmdReq.Requests)
 		}
 
-		p.cb.Done(&resp)
-	})
+		if !d.IsLeader() || term != d.Term() { // non-leader
+			return
+		}
+
+		d.handleProposal(&ent, func(p *proposal) {
+			resp := raft_cmdpb.RaftCmdResponse{
+				Header: &raft_cmdpb.RaftResponseHeader{},
+			}
+
+			if cmdReq.AdminRequest == nil {
+				d.postProcessRaftProposal(p, cmdReq.Requests, &resp)
+			} else {
+				d.postProcessAdaminProposal(cmdReq.AdminRequest, &resp)
+			}
+
+			p.cb.Done(&resp)
+		})
+	}
 
 }
 
-func (d *peerMsgHandler) postProcessRaftProposal(p *proposal, cmdReq *raft_cmdpb.RaftCmdRequest,
+func (d *peerMsgHandler) postProcessRaftProposal(p *proposal, rqeusts []*raft_cmdpb.Request,
 	resp *raft_cmdpb.RaftCmdResponse) {
-	for _, clientReq := range cmdReq.Requests {
+	for _, clientReq := range rqeusts {
 		clientResp := raft_cmdpb.Response{}
 
 		switch clientReq.CmdType {
@@ -183,19 +210,17 @@ func (d *peerMsgHandler) postProcessRaftProposal(p *proposal, cmdReq *raft_cmdpb
 	}
 }
 
-func (d *peerMsgHandler) postProcessAdaminProposal(p *proposal, cmdReq *raft_cmdpb.RaftCmdRequest,
+func (d *peerMsgHandler) postProcessAdaminProposal(adminReq *raft_cmdpb.AdminRequest,
 	resp *raft_cmdpb.RaftCmdResponse) {
 
 	adminResp := raft_cmdpb.AdminResponse{}
-	switch cmdReq.AdminRequest.CmdType {
+	switch adminReq.CmdType {
 	case raft_cmdpb.AdminCmdType_CompactLog:
 		// log.Infof("peer-[%d] use schedule task to compact log, truncated idx {%d}", d.PeerId(), compactReq.CompactIndex)
 		adminResp.CmdType = raft_cmdpb.AdminCmdType_CompactLog
 		adminResp.CompactLog = &raft_cmdpb.CompactLogResponse{}
 	case raft_cmdpb.AdminCmdType_InvalidAdmin:
 		adminResp.CmdType = raft_cmdpb.AdminCmdType_InvalidAdmin
-	case raft_cmdpb.AdminCmdType_ChangePeer:
-		adminResp.CmdType = raft_cmdpb.AdminCmdType_ChangePeer
 	case raft_cmdpb.AdminCmdType_TransferLeader:
 		adminResp.CmdType = raft_cmdpb.AdminCmdType_TransferLeader
 		adminResp.TransferLeader = &raft_cmdpb.TransferLeaderResponse{}
@@ -222,32 +247,27 @@ func (d *peerMsgHandler) processAdminRequest(adminReq *raft_cmdpb.AdminRequest, 
 		}
 
 	case raft_cmdpb.AdminCmdType_InvalidAdmin:
-	case raft_cmdpb.AdminCmdType_ChangePeer:
-		changePeerReq := adminReq.ChangePeer
-
-		if changePeerReq.ChangeType == eraftpb.ConfChangeType_AddNode {
-
-		} else { // Remove
-
-		}
-
-		d.peerStorage.region.RegionEpoch.ConfVer++
-
-		d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{
-			ChangeType: changePeerReq.ChangeType,
-			NodeId:     changePeerReq.Peer.Id,
-		})
 
 	case raft_cmdpb.AdminCmdType_TransferLeader:
 		transferLeaderReq := adminReq.TransferLeader
 		d.RaftGroup.TransferLeader(transferLeaderReq.Peer.Id)
+
 	case raft_cmdpb.AdminCmdType_Split:
 	}
 
 }
 
-func (d *peerMsgHandler) processRaftRequest(wb *engine_util.WriteBatch, raftReq *raft_cmdpb.RaftCmdRequest) {
-	for _, clientReq := range raftReq.Requests {
+func (d *peerMsgHandler) processConfChange(confChange *eraftpb.ConfChange, ent eraftpb.Entry) {
+	d.peerStorage.region.RegionEpoch.ConfVer++
+
+	d.RaftGroup.ApplyConfChange(eraftpb.ConfChange{
+		ChangeType: confChange.ChangeType,
+		NodeId:     confChange.NodeId,
+	})
+}
+
+func (d *peerMsgHandler) processRaftRequest(wb *engine_util.WriteBatch, requests []*raft_cmdpb.Request) {
+	for _, clientReq := range requests {
 		switch clientReq.CmdType {
 		case raft_cmdpb.CmdType_Put:
 			putReq := clientReq.Put
@@ -344,9 +364,10 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 	// Your Code Here (2B).
 	// if in leader transfer, reject request
 	if d.RaftGroup.IsOnLeaderTransfer() {
+		log.Infof("leader is current in transfering state")
 		errResp := ErrResp(errors.New("raftgroup is in leader transfering"))
 		errResp.AdminResponse = &raft_cmdpb.AdminResponse{
-			CmdType: raft_cmdpb.AdminCmdType_TransferLeader,
+			CmdType: msg.AdminRequest.CmdType,
 		}
 		cb.Done(errResp)
 		return
@@ -362,14 +383,24 @@ func (d *peerMsgHandler) propocessClientMsg(msg *raft_cmdpb.RaftCmdRequest, cb *
 		cb:    cb,
 	})
 
+	var err error
 	// log.Infof("peer-%d process client msg %v", d.PeerId(), d.proposals)
-
-	data, err := msg.Marshal()
-	if err != nil {
-		log.Panic(err)
+	if msg.AdminRequest != nil &&
+		msg.AdminRequest.CmdType == raft_cmdpb.AdminCmdType_ChangePeer {
+		log.Infof("leader-[%d] start to propose conf change", d.PeerId())
+		err = d.RaftGroup.ProposeConfChange(eraftpb.ConfChange{
+			ChangeType: msg.AdminRequest.ChangePeer.ChangeType,
+			NodeId:     msg.AdminRequest.ChangePeer.Peer.Id,
+		})
+	} else {
+		var data []byte
+		data, err = msg.Marshal()
+		if err != nil {
+			log.Panic(err)
+		}
+		err = d.RaftGroup.Propose(data)
 	}
 
-	err = d.RaftGroup.Propose(data)
 	if err != nil {
 		log.Panic(err)
 	}
