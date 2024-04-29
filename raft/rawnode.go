@@ -142,6 +142,7 @@ func (rn *RawNode) Step(m pb.Message) error {
 	if IsLocalMsg(m.MsgType) {
 		return ErrStepLocalMsg
 	}
+
 	if pr := rn.Raft.Prs[m.From]; pr != nil || !IsResponseMsg(m.MsgType) {
 		return rn.Raft.Step(m)
 	}
@@ -248,6 +249,7 @@ func (rn *RawNode) Advance(rd Ready) {
 }
 
 func (rn *RawNode) IsOnLeaderTransfer() bool {
+	// log.Infof("node-[%d] lead target {%d}", rn.Raft.id, rn.Raft.leadTransferee)
 	return rn.Raft.leadTransferee != 0
 }
 

@@ -413,7 +413,7 @@ func (r *Raft) handleMsgCandicate(m pb.Message) {
 	} else if m.MsgType == pb.MessageType_MsgSnapshot {
 		r.handleSnapshot(m)
 	} else if m.MsgType == pb.MessageType_MsgTimeoutNow {
-		fmt.Println("xxx")
+		log.Infof("node-[%d] has been in candidate with term {%d}", r.id, r.Term)
 	}
 }
 
@@ -424,7 +424,10 @@ func (r *Raft) handleMsgTimeout(m pb.Message) {
 		return
 	}
 
-	r.startElection()
+	r.Step(pb.Message{
+		MsgType: pb.MessageType_MsgHup,
+		To:      r.id,
+	})
 }
 
 func (r *Raft) checkInGroup(peerId uint64) bool {
@@ -437,7 +440,6 @@ func (r *Raft) checkInGroup(peerId uint64) bool {
 }
 
 func (r *Raft) handleLeaderTransfer(m pb.Message) {
-	log.Infof("node-[%d] in term {%d} receive a leader transfer to {%d}", r.id, r.Term, m.From)
 	// if m.Term < r.Term {
 	// 	log.Warnf("node-[%d] receive a old leader transfer to {%d}", r.id, m.From)
 	// 	return
@@ -445,16 +447,20 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 
 	// leader check the transfee's qualification
 	if r.State == StateLeader {
-		// check m.from exists
-		if _, ok := r.Prs[m.From]; !ok {
+		// check m.from exists or transfer to self
+		if _, ok := r.Prs[m.From]; !ok || m.From == r.id {
 			return
 		}
-
-		if m.From == r.id {
-			return
+		// has been leader or in transfer process
+		if r.leadTransferee != None {
+			if r.leadTransferee == m.From {
+				return
+			}
+			r.leadTransferee = None //shutdown last process
 		}
 
 		r.leadTransferee = m.From
+		log.Infof("node-[%d] leader in term {%d} receive a leader transfer to {%d}", r.id, r.Term, m.From)
 
 		if !r.checkQualification(m.From) {
 			fmt.Println("not qualified, wait")
@@ -471,17 +477,10 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 		})
 	} else if r.State == StateFollower {
 		// redirect leader transfer msg to leader if from is self
-		if m.From == r.id {
-			log.Infof("node-[%d] receive a transfer to {%d}, redirect to {%d}", r.id, m.From, r.Lead)
-
-			r.msgs = append(r.msgs, pb.Message{
-				MsgType: pb.MessageType_MsgTransferLeader,
-				From:    r.id,
-				To:      r.Lead,
-				Term:    r.Term,
-			})
+		if r.Lead != 0 {
+			m.To = r.Lead
+			r.msgs = append(r.msgs, m)
 		}
-
 	} else {
 		fmt.Println("eRRRRRRRR")
 	}
@@ -489,17 +488,13 @@ func (r *Raft) handleLeaderTransfer(m pb.Message) {
 
 func (r *Raft) checkQualification(peer uint64) bool {
 	peerMatch := r.Prs[peer].Match
-	log.Infof("qualification peer-[%d], match {%d}, currrent leader {%d}",
-		peer, peerMatch, r.RaftLog.LastIndex())
-	if peerMatch >= r.RaftLog.LastIndex() {
-		return true
-	}
-	return false
+	log.Infof("qualification peer-[%d], match {%d}, currrent leader {%d}, logs[:10] : %v",
+		peer, peerMatch, r.RaftLog.LastIndex(), r.RaftLog.entries[:min(10, uint64(len(r.RaftLog.entries)))])
+	return peerMatch == r.RaftLog.LastIndex()
 }
 
 func (r *Raft) handlePropose(m pb.Message) {
 	log.Infof("node-[%d] start to propose", r.id)
-
 	// save local
 	lastLogIdx := r.RaftLog.LastIndex()
 	proposeEntries := make([]pb.Entry, 0)
@@ -810,7 +805,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 
 	r.becomeFollower(m.Term, m.From)
-	log.Infof("node-[%d] turns to follower at term {%d}, leader {%d}", r.id, m.Term, m.From)
 	if r.leadTransferee == m.From {
 		log.Infof("node-[%d] receive a ae from {%d} set leadTransferee finished to 0", r.id, m.From)
 		r.leadTransferee = 0
