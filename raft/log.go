@@ -15,6 +15,8 @@
 package raft
 
 import (
+	"fmt"
+
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -74,7 +76,14 @@ func newLog(storage Storage) *RaftLog {
 		panic(err)
 	}
 
-	// fmt.Printf("storage first last %d, %d\n", firstIndex, lastIndex)
+	// Set dummy index and dummy term
+	raftLog.dummy = firstIndex - 1
+	term, err := storage.Term(raftLog.dummy)
+	if err != nil {
+		panic(err)
+	}
+	raftLog.dummyTerm = term
+
 	// check if only exists the dummy log
 	if firstIndex > lastIndex {
 		// set state
@@ -84,12 +93,13 @@ func newLog(storage Storage) *RaftLog {
 
 	diskLogs, err := storage.Entries(firstIndex, lastIndex+1)
 	if err != nil {
+		fmt.Println(firstIndex, lastIndex)
 		panic(err)
 	}
 	// fmt.Println(firstIndex, lastIndex, diskLogs)
 	raftLog.entries = append(raftLog.entries, diskLogs...)
 	raftLog.stabled = lastIndex
-	// raftLog.dummy = firstIndex - 1
+
 	return raftLog
 }
 
@@ -106,12 +116,14 @@ func (l *RaftLog) maybeCompact() {
 	offset := l.entries[0].Index
 
 	//delete entries [:truncatedIndex], excludes truncatedIndex
-	if truncatedIndex > offset {
+	if truncatedIndex >= offset {
+		// dummyEnt := pb.Entry{Term: l.entries[0].Term, Index: l.entries[0].Index}
+
 		remainEntries := l.entries[truncatedIndex-offset:]
 		// fmt.Printf("truncate %d, offset %d, remain %v\n", truncatedIndex, offset,
 		// 	remainEntries[:1])
 
-		l.entries = make([]pb.Entry, 0)
+		l.entries = []pb.Entry{}
 		l.entries = append(l.entries, remainEntries...)
 	}
 	l.dummy = truncatedIndex - 1
@@ -152,7 +164,10 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	offset := l.entries[0].Index
 
 	// others, get from mem
-	start := l.applied + 1 - offset
+	start := uint64(0)
+	if l.applied >= offset {
+		start = l.applied + 1 - offset
+	}
 	end := l.committed - offset
 
 	// fmt.Println(offset, l.applied, l.committed, len(l.entries))

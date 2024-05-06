@@ -348,12 +348,22 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 	if err := snapData.Unmarshal(snapshot.Data); err != nil {
 		return nil, err
 	}
-	fmt.Println("===", snapData.Region)
+	fmt.Println("===", snapData.Region, ", ", ps.region)
+
+	// check snapshot overlap with current region
+	snapRegion := snapData.Region
+	region := ps.region
+
+	if ps.isInitialized() && !util.RegionEqual(region, snapRegion) {
+		log.Panicf("ps-[%s] receive a snapshot differ from current region", ps.Tag)
+		return nil, nil
+	}
 
 	// Hint: things need to do here including: update peer storage state like raftState and applyState, etc,
 	// and send RegionTaskApply task to region worker through ps.regionSched, also remember call ps.clearMeta
 	// and ps.clearExtraData to delete stale data
 	// Your Code Here (2C).
+
 	if ps.isInitialized() {
 		ps.clearMeta(kvWB, raftWB)
 		ps.clearExtraData(snapData.Region)

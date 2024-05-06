@@ -231,13 +231,13 @@ func (rn *RawNode) Advance(rd Ready) {
 	}
 
 	if len(rd.Entries) > 0 {
-		rn.Raft.RaftLog.stabled += uint64(len(rd.Entries))
+		rn.Raft.RaftLog.stabled = rd.Entries[len(rd.Entries)-1].Index
 	}
 
 	if len(rd.CommittedEntries) > 0 {
 		// log.Infof("rn update before {%d}, after {%d}", rn.Raft.RaftLog.applied,
 		// 	rn.Raft.RaftLog.applied+uint64(len(rd.CommittedEntries)))
-		rn.Raft.RaftLog.applied += uint64(len(rd.CommittedEntries))
+		rn.Raft.RaftLog.applied = rd.CommittedEntries[len(rd.CommittedEntries)-1].Index
 	}
 
 	// do log compact in memory

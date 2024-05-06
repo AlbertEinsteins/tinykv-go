@@ -201,8 +201,6 @@ func newRaft(c *Config) *Raft {
 
 	// Restore applied from Config
 	raft.RaftLog.applied = c.Applied
-	raft.RaftLog.dummy = c.Applied
-	raft.RaftLog.dummyTerm = hardState.Term
 
 	log.Infof("raft-%d restart with last index %d, commited %d, applied %d",
 		raft.id, raft.RaftLog.LastIndex(), raft.RaftLog.committed, raft.RaftLog.applied)

@@ -33,7 +33,8 @@ const (
 
 type peerMsgHandler struct {
 	*peer
-	ctx *GlobalContext
+	ctx               *GlobalContext
+	regionBeforeSplit metapb.Region
 }
 
 func newPeerMsgHandler(peer *peer, ctx *GlobalContext) *peerMsgHandler {
@@ -63,7 +64,7 @@ func (d *peerMsgHandler) HandleRaftReady() {
 	}
 
 	if applySnapResult != nil {
-		d.updateRegionState(applySnapResult.Region)
+		d.updateRegionStateBySnap(applySnapResult)
 	}
 
 	d.peer.Send(d.ctx.trans, ready.Messages)
@@ -89,16 +90,9 @@ func (d *peerMsgHandler) HandleRaftReady() {
 		if err = writeBatch.SetMeta(meta.ApplyStateKey(d.regionId), d.peerStorage.applyState); err != nil {
 			log.Panic(err)
 		}
-		// log.Infof("%v xxxxx", d.Tag)
 
 		// 2.write
 		writeBatch.MustWriteToDB(d.ctx.engine.Kv)
-		// log.Infof("%v xxxxxxxxx", d.Tag)
-		// for rid, region := range d.ctx.storeMeta.regions {
-		// 	fmt.Println(rid, region)
-		// 	// regionState, _ := meta.GetRegionLocalState(d.ctx.engine.Kv, 6)
-		// 	// fmt.Println(regionState)
-		// }
 	}
 
 	d.RaftGroup.Advance(ready)
@@ -216,11 +210,15 @@ func (d *peerMsgHandler) postProcessRaftProposal(p *proposal, raftCmd *raft_cmdp
 			clientResp.CmdType = raft_cmdpb.CmdType_Delete
 			clientResp.Delete = &raft_cmdpb.DeleteResponse{}
 		case raft_cmdpb.CmdType_Snap:
+			if errEpochNotMatch, ok := util.CheckRegionEpoch(raftCmd, d.Region(), true).(*util.ErrEpochNotMatch); ok {
+				BindRespError(resp, errEpochNotMatch)
+				return
+			}
+
 			clientResp.CmdType = raft_cmdpb.CmdType_Snap
 			clientResp.Snap = &raft_cmdpb.SnapResponse{
 				Region: d.Region(),
 			}
-			// fmt.Println("xxx", d.regionBeforeSnap)
 			p.cb.Txn = d.ctx.engine.Kv.NewTransaction(false)
 		}
 
@@ -296,13 +294,7 @@ func (d *peerMsgHandler) processAdminRequest(KvWB *engine_util.WriteBatch, raftC
 
 		d.updateMetaWithSplitRegion(oldRegion, d.peer, newRegion, peer)
 
-		// log.Infof("%v split old region %v, new region %v", d.Tag, oldRegion, newRegion)
-
-		if d.IsLeader() {
-			// update cache in scheduler
-			d.notifyHeartbeatScheduler(oldRegion, d.peer)
-			d.notifyHeartbeatScheduler(newRegion, peer)
-		}
+		log.Infof("%v split old region %v, new region %v", d.Tag, oldRegion, newRegion)
 
 		d.handleProposal(&ent, func(p *proposal) {
 			p.cb.Done(&raft_cmdpb.RaftCmdResponse{
@@ -316,6 +308,11 @@ func (d *peerMsgHandler) processAdminRequest(KvWB *engine_util.WriteBatch, raftC
 			})
 		})
 
+		if d.IsLeader() {
+			// update cache in scheduler
+			d.notifyHeartbeatScheduler(oldRegion, d.peer)
+			d.notifyHeartbeatScheduler(newRegion, peer)
+		}
 	}
 
 }
@@ -463,6 +460,17 @@ func (d *peerMsgHandler) updateRegionState(region *metapb.Region) {
 	storeMeta.setRegion(region, d.peer)
 }
 
+func (d *peerMsgHandler) updateRegionStateBySnap(applySnapRes *ApplySnapResult) {
+	storeMeta := d.ctx.storeMeta
+	storeMeta.Lock()
+	defer storeMeta.Unlock()
+
+	storeMeta.regionRanges.Delete(&regionItem{applySnapRes.PrevRegion})
+
+	storeMeta.regionRanges.ReplaceOrInsert(&regionItem{region: applySnapRes.Region})
+	storeMeta.setRegion(applySnapRes.Region, d.peer)
+}
+
 func (d *peerMsgHandler) findPeerIndex(expectPeer uint64) int {
 	region := d.Region()
 
@@ -598,8 +606,9 @@ func (d *peerMsgHandler) proposeRaftCommand(msg *raft_cmdpb.RaftCmdRequest, cb *
 		cb.Done(errResp)
 		return
 	}
-
 	// cache region
+	d.regionBeforeSplit = *d.Region()
+
 	if msg.AdminRequest != nil {
 		d.proposeAdminMsg(msg, cb)
 	} else {
