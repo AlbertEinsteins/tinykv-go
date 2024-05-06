@@ -54,6 +54,7 @@ func replicatePeer(storeID uint64, cfg *config.Config, sched chan<- worker.Task,
 		Id:          regionID,
 		RegionEpoch: &metapb.RegionEpoch{},
 	}
+
 	return NewPeer(storeID, cfg, engines, region, sched, metaPeer)
 }
 
@@ -218,11 +219,17 @@ func (p *peer) Destroy(engine *engine_util.Engines, keepData bool) error {
 	meta.WriteRegionState(kvWB, region, rspb.PeerState_Tombstone)
 	// write kv badgerDB first in case of restart happen between two write
 	if err := kvWB.WriteToDB(engine.Kv); err != nil {
+		log.Error(err)
 		return err
 	}
 	if err := raftWB.WriteToDB(engine.Raft); err != nil {
+		log.Error(err)
 		return err
 	}
+
+	// applyState, err := meta.GetApplyState(engine.Kv, p.regionId)
+	// log.Infof("peer-[%d] destroy itself, get apply State %v apply key %v, err %v store id %d",
+	// 	p.PeerId(), applyState, meta.ApplyStateKey(p.regionId), err, p.storeID())
 
 	if p.peerStorage.isInitialized() && !keepData {
 		// If we meet panic when deleting data and raft log, the dirty data
@@ -373,8 +380,11 @@ func (p *peer) sendRaftMessage(msg eraftpb.Message, trans Transport) error {
 	}
 
 	fromPeer := *p.Meta
+
+	// fmt.Println(p.peerCache, p.peerStorage.region)
 	toPeer := p.getPeerFromCache(msg.To)
 	if toPeer == nil {
+		fmt.Println(p.peerCache, p.peerStorage.region)
 		return fmt.Errorf("failed to lookup recipient peer %v in region %v", msg.To, p.regionId)
 	}
 	log.Debugf("%v, send raft msg %v from %v to %v", p.Tag, msg.MsgType, fromPeer, toPeer)

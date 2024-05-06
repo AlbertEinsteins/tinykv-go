@@ -26,6 +26,7 @@ func GetRaftLocalState(db *badger.DB, regionId uint64) (*rspb.RaftLocalState, er
 
 func GetApplyState(db *badger.DB, regionId uint64) (*rspb.RaftApplyState, error) {
 	applyState := new(rspb.RaftApplyState)
+
 	if err := engine_util.GetMeta(db, ApplyStateKey(regionId), applyState); err != nil {
 		return nil, err
 	}
@@ -52,9 +53,11 @@ func InitRaftLocalState(raftEngine *badger.DB, region *metapb.Region) (*rspb.Raf
 	if err != nil && err != badger.ErrKeyNotFound {
 		return nil, err
 	}
+
 	if err == badger.ErrKeyNotFound {
 		raftState = new(rspb.RaftLocalState)
 		raftState.HardState = new(eraftpb.HardState)
+
 		if len(region.Peers) > 0 {
 			// new split region
 			raftState.LastIndex = RaftInitLogIndex
@@ -75,9 +78,11 @@ func InitApplyState(kvEngine *badger.DB, region *metapb.Region) (*rspb.RaftApply
 	if err != nil && err != badger.ErrKeyNotFound {
 		return nil, err
 	}
+
 	if err == badger.ErrKeyNotFound {
 		applyState = new(rspb.RaftApplyState)
 		applyState.TruncatedState = new(rspb.RaftTruncatedState)
+
 		if len(region.Peers) > 0 {
 			applyState.AppliedIndex = RaftInitLogIndex
 			applyState.TruncatedState.Index = RaftInitLogIndex
@@ -95,5 +100,6 @@ func WriteRegionState(kvWB *engine_util.WriteBatch, region *metapb.Region, state
 	regionState := new(rspb.RegionLocalState)
 	regionState.State = state
 	regionState.Region = region
+	// fmt.Println("=====", region.Id, " size", RegionStateKey(region.Id))
 	kvWB.SetMeta(RegionStateKey(region.Id), regionState)
 }

@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"sort"
 
+	"github.com/pingcap-incubator/tinykv/kv/raftstore/util"
 	"github.com/pingcap-incubator/tinykv/log"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -198,20 +199,13 @@ func newRaft(c *Config) *Raft {
 	raft.becomeFollower(hardState.Term, hardState.Vote)
 	raft.RaftLog.committed = hardState.Commit
 
-	// Restore applied from Snapshot or Config
-	snap, err := c.Storage.Snapshot()
-	if err == nil {
-		raft.RaftLog.dummy = snap.Metadata.Index
-		raft.RaftLog.dummyTerm = snap.Metadata.Term
-		raft.RaftLog.applied = snap.Metadata.Index
-	} else {
-		raft.RaftLog.applied = c.Applied
-		raft.RaftLog.dummy = c.Applied
-		raft.RaftLog.dummyTerm = hardState.Term
-	}
+	// Restore applied from Config
+	raft.RaftLog.applied = c.Applied
+	raft.RaftLog.dummy = c.Applied
+	raft.RaftLog.dummyTerm = hardState.Term
 
-	// log.Infof("raft-%d restart with last index %d, commited %d, applied %d",
-	// 	raft.id, raft.RaftLog.LastIndex(), raft.RaftLog.committed, raft.RaftLog.applied)
+	log.Infof("raft-%d restart with last index %d, commited %d, applied %d",
+		raft.id, raft.RaftLog.LastIndex(), raft.RaftLog.committed, raft.RaftLog.applied)
 	raft.initProgress(raft.RaftLog.LastIndex() + 1)
 	return raft
 }
@@ -264,7 +258,6 @@ func (r *Raft) triggerElection() {
 }
 
 func (r *Raft) triggerHearbeat() {
-	log.Debugf("node-[%d] start to signal send heartbeat\n", r.id)
 	heartbeatStartMsg := pb.Message{
 		MsgType: pb.MessageType_MsgBeat,
 		From:    r.id,
@@ -286,7 +279,7 @@ func (r *Raft) initProgress(nextIndex uint64) {
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
-	log.Debugf("node-[%d] turns to follower with leader [%d] in term {%d}", r.id, lead, term)
+	log.Debugf("node-[%d] leader [%d] in term {%d}", r.id, lead, term)
 	// Your Code Here (2A).
 	r.State = StateFollower
 	r.Term = term
@@ -310,7 +303,7 @@ func (r *Raft) becomeCandidate() {
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
 	// NOTE: Leader should propose a noop entry on its term
-	log.Infof("node-[%d] turns to leader at term {%d}", r.id, r.Term)
+	// log.Infof("node-[%d] turns to leader at term {%d}", r.id, r.Term)
 	r.State = StateLeader
 	r.Lead = r.id
 	r.electionElapsed = 0
@@ -334,7 +327,7 @@ func (r *Raft) becomeLeader() {
 }
 
 func (r *Raft) updateProcess(peer, nextMatch, nextNext uint64) {
-	// log.Infof("node-[%d] update match idx {%d}, next {%d}", peer, nextMatch, nextNext)
+	// log.Infof("node-[%d] update peer {%d} match idx {%d}, next {%d}", r.id, peer, nextMatch, nextNext)
 	r.Prs[peer].Match = max(r.Prs[peer].Match, nextMatch)
 	r.Prs[peer].Next = nextNext
 }
@@ -494,7 +487,7 @@ func (r *Raft) checkQualification(peer uint64) bool {
 }
 
 func (r *Raft) handlePropose(m pb.Message) {
-	log.Infof("node-[%d] start to propose", r.id)
+	log.Debugf("node-[%d] start to propose", r.id)
 	// save local
 	lastLogIdx := r.RaftLog.LastIndex()
 	proposeEntries := make([]pb.Entry, 0)
@@ -601,8 +594,8 @@ func (r *Raft) startHeartBeat() {
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
-	log.Debugf("node-[%d] start to send ae to node-{%d} in term {%d}",
-		r.id, to, r.Term)
+	// log.Infof("node-[%d] start to send ae to node-{%d} in term {%d}",
+	// 	r.id, to, r.Term)
 
 	r.send(to, pb.MessageType_MsgAppend)
 	return true
@@ -611,8 +604,8 @@ func (r *Raft) sendAppend(to uint64) bool {
 func (r *Raft) send(to uint64, msgType pb.MessageType) {
 	nextId := r.Prs[to].Next
 
-	// log.Infof("node {%d}, send to {%d} nextIdx {%d}, first {%d}",
-	// 	r.id, to, nextId, r.RaftLog.FirstIndex())
+	log.Debugf("node {%d}, send to {%d} nextIdx {%d}, first {%d}",
+		r.id, to, nextId, r.RaftLog.FirstIndex())
 
 	if nextId < r.RaftLog.FirstIndex() {
 		r.sendSnapshot(to)
@@ -620,17 +613,13 @@ func (r *Raft) send(to uint64, msgType pb.MessageType) {
 	}
 
 	entries := make([]*pb.Entry, 0)
-	if msgType != pb.MessageType_MsgHeartbeat {
-		entries = append(entries, r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)...)
-	} else {
-		entries = nil // must be nil, could not be a empty slice
-	}
+	entries = append(entries, r.RaftLog.LogRange(nextId, r.RaftLog.LastIndex()+1)...)
 
 	prevLogIdx := nextId - 1
 	prevLogTerm, err := r.RaftLog.Term(prevLogIdx)
 	// log.Infof("peer {%d}, send to {%d} prevLogIdx {%d}, prevlogterm {%d}", r.id, to, prevLogIdx, prevLogTerm)
 	if err != nil {
-		fmt.Println(prevLogIdx, r.RaftLog.entries)
+		fmt.Println(prevLogIdx)
 		panic(err)
 	}
 
@@ -658,18 +647,24 @@ func (r *Raft) noOpEntry() *pb.Entry {
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
-	r.send(to, pb.MessageType_MsgHeartbeat)
+	r.msgs = append(r.msgs, pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeat,
+		From:    r.id,
+		To:      to,
+		Term:    r.Term,
+		Commit:  util.RaftInvalidIndex,
+	})
 }
 
 func (r *Raft) sendSnapshot(to uint64) {
 	// get snapshot
 	snapshot, err := r.RaftLog.storage.Snapshot()
 	if err != nil {
-		// log.Warnf("node-[%d] snapshot is not ready.............", r.id)
+		log.Warnf("node-[%d] snapshot is not ready.............", r.id)
 		return
 	}
 
-	// log.Infof("node-[%d] start to send to node-[%d] snapshot", r.id, to)
+	log.Infof("node-[%d] start to send to node-[%d] snapshot", r.id, to)
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType:  pb.MessageType_MsgSnapshot,
 		From:     r.id,
@@ -681,8 +676,8 @@ func (r *Raft) sendSnapshot(to uint64) {
 
 // handle requestvote rpc request
 func (r *Raft) handleRequestVote(m pb.Message) {
-	log.Infof("node-[%d] in term {%d} state {%v} receive a vote request in term {%v} from node {%d}",
-		r.id, r.Term, r.State.String(), m.Term, m.From)
+	// log.Infof("node-[%d] in term {%d} state {%v} receive a vote request in term {%v} from node {%d}",
+	// 	r.id, r.Term, r.State.String(), m.Term, m.From)
 
 	if m.Term < r.Term {
 		r.msgs = append(r.msgs, pb.Message{
@@ -704,7 +699,7 @@ func (r *Raft) handleRequestVote(m pb.Message) {
 	isVote := r.canVoteFor(m.From, m.LogTerm, m.Index)
 	if isVote {
 		r.Vote = m.From
-		log.Infof("node-[%d] vote for node-{%d}", r.id, m.From)
+		// log.Infof("node-[%d] vote for node-{%d}", r.id, m.From)
 	}
 
 	r.msgs = append(r.msgs, pb.Message{
@@ -812,6 +807,34 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 	prevLogIndex := m.Index
 	prevLogTerm := m.LogTerm
+	log.Debugf("node-[%d] receive previdx %d, prevterm %d from node-[%d] cur first idx {%d}, dummy index {%d}, dummyTerm {%d}",
+		r.id, prevLogIndex, prevLogTerm, m.From, r.RaftLog.FirstIndex(), r.RaftLog.dummy, r.RaftLog.dummyTerm)
+
+	if prevLogIndex > r.RaftLog.LastIndex() { // case1. follower too short
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      m.From,
+			Term:    r.Term,
+			Reject:  true,
+			Index:   r.RaftLog.LastIndex(),
+		})
+		return
+	}
+
+	// case 2. prevlog is in snapshot
+	if prevLogIndex < r.RaftLog.dummy {
+		r.msgs = append(r.msgs, pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			From:    r.id,
+			To:      m.From,
+			Term:    r.Term,
+			Reject:  true,
+			Index:   r.RaftLog.LastIndex(),
+		})
+		return
+	}
+
 	if r.conflictAt(prevLogIndex, prevLogTerm) {
 		// compute match index, rtn to leader
 		// fmt.Printf("node-[%d] append conflict at idx {%d}\n", r.id, prevLogIndex)
@@ -848,7 +871,12 @@ func (r *Raft) processEntries(m *pb.Message) {
 		// log.Infof("ent {%d, %d}, cur logs %v", appendIdx, ent.Term, r.RaftLog.entries)
 		if appendIdx <= r.RaftLog.LastIndex() {
 			// fmt.Printf("node-[%d] append conflict at <%d>\n", r.id, appendIdx)
-			if r.conflictAt(appendIdx, ent.Term) {
+
+			term, err := r.RaftLog.Term(appendIdx)
+			if err != nil {
+				log.Panic(err)
+			}
+			if term != ent.Term {
 				// delete [appendIdx:]
 				log.Debugf("node-[%d] remove the entry after index {%d}", r.id, appendIdx)
 				r.removeConflictEntryAfter(appendIdx)
@@ -897,8 +925,6 @@ func (r *Raft) conflictAt(prevLogIdx, prevLogTerm uint64) bool {
 
 	term, err := r.RaftLog.Term(prevLogIdx)
 
-	// log.Infof("node-[%d] receive previdx %d, prevterm %d, cur term %d", r.id,
-	// 	prevLogIdx, prevLogTerm, term)
 	if err != nil {
 		panic(err)
 	}
@@ -938,8 +964,10 @@ func (r *Raft) handleAppendEntriesResponse(m pb.Message) {
 		}
 	} else {
 		// conflict entry, retry
-		log.Debugf("node-[%d] in leader state receive a conflict append response from node-{%d}", r.id, m.From)
-		r.Prs[m.From].Next--
+		log.Infof("node-[%d] in leader state receive a conflict append response from node-{%d}", r.id, m.From)
+		if r.Prs[m.From].Next >= r.RaftLog.FirstIndex() {
+			r.Prs[m.From].Next--
+		}
 		r.sendAppend(m.From)
 	}
 
@@ -987,39 +1015,18 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 			From:    r.id,
 			To:      m.From,
 			Term:    r.Term,
+			Commit:  r.RaftLog.committed,
 		})
 		return
 	}
 
 	r.becomeFollower(m.Term, m.From)
 
-	if r.leadTransferee == m.From {
-		r.leadTransferee = 0
-	}
-
-	prevLogIndex := m.Index
-	prevLogTerm := m.LogTerm
-	if r.conflictAt(prevLogIndex, prevLogTerm) {
-		// compute match index, rtn to leader
-		// fmt.Println("conflict")
-		r.msgs = append(r.msgs, pb.Message{
-			MsgType: pb.MessageType_MsgHeartbeatResponse,
-			From:    r.id,
-			To:      m.From,
-			Term:    r.Term,
-			Reject:  true,
-			Index:   0,
-		})
-		return
-	}
-
-	r.processEntries(&m)
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeatResponse,
 		From:    r.id,
 		To:      m.From,
 		Term:    r.Term,
-		Index:   m.Index + uint64(len(m.Entries)),
 		Commit:  r.RaftLog.committed,
 	})
 }
@@ -1037,10 +1044,6 @@ func (r *Raft) handleHeartBeatResponse(m pb.Message) {
 
 	if !m.Reject {
 		// update r.Prs
-		matchIdx := max(r.Prs[m.From].Match, m.Index)
-		r.updateProcess(m.From, matchIdx, matchIdx+1)
-		r.updateCommitIndex()
-
 		// if follower's log is too short, need to replicate
 		if r.RaftLog.committed > m.Commit {
 			r.sendAppend(m.From)
@@ -1051,7 +1054,7 @@ func (r *Raft) handleHeartBeatResponse(m pb.Message) {
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
-	log.Infof("node-[%d] receive a snapshot request", r.id)
+	log.Infof("node-[%d] in term {%d} receive a snapshot request meta index {%d} in term {%d}, cur commited {%d}", r.id, r.Term, m.Snapshot.Metadata.Index, m.Term, r.RaftLog.committed)
 
 	meta := m.Snapshot.Metadata
 	if m.Term < r.Term {
@@ -1061,19 +1064,23 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 			From:    r.id,
 			To:      m.From,
 			Reject:  true,
+			Index:   r.RaftLog.LastIndex(),
 		})
 		return
 	}
 
-	if r.RaftLog.committed >= meta.Index { // cur node commited
+	if r.RaftLog.committed >= meta.Index { // cur node commited, means old snapshot
 		r.msgs = append(r.msgs, pb.Message{
 			MsgType: pb.MessageType_MsgAppendResponse,
 			From:    r.id,
 			To:      m.From,
 			Reject:  true,
+			Index:   r.RaftLog.LastIndex(),
 		})
 		return
 	}
+
+	log.Infof("node-[%d] handle a snapshot from {%d}", r.id, m.From)
 
 	r.becomeFollower(m.Term, m.From)
 
@@ -1094,7 +1101,8 @@ func (r *Raft) handleSnapshot(m pb.Message) {
 		MsgType: pb.MessageType_MsgAppendResponse,
 		From:    r.id,
 		To:      m.From,
-		Index:   m.Index,
+		Index:   meta.Index,
+		Term:    r.Term,
 	})
 }
 

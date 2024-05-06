@@ -89,6 +89,7 @@ func newLog(storage Storage) *RaftLog {
 	// fmt.Println(firstIndex, lastIndex, diskLogs)
 	raftLog.entries = append(raftLog.entries, diskLogs...)
 	raftLog.stabled = lastIndex
+	// raftLog.dummy = firstIndex - 1
 	return raftLog
 }
 
@@ -101,11 +102,11 @@ func (l *RaftLog) maybeCompact() {
 		return
 	}
 
-	truncatedIndex, _ := l.storage.FirstIndex()
+	truncatedIndex, _ := l.storage.FirstIndex() // first is not compact log
 	offset := l.entries[0].Index
 
 	//delete entries [:truncatedIndex], excludes truncatedIndex
-	if truncatedIndex >= offset {
+	if truncatedIndex > offset {
 		remainEntries := l.entries[truncatedIndex-offset:]
 		// fmt.Printf("truncate %d, offset %d, remain %v\n", truncatedIndex, offset,
 		// 	remainEntries[:1])
@@ -154,7 +155,7 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	start := l.applied + 1 - offset
 	end := l.committed - offset
 
-	// fmt.Println(offset, l.applied, l.committed)
+	// fmt.Println(offset, l.applied, l.committed, len(l.entries))
 	ents = append(ents, l.entries[start:end+1]...)
 	return ents
 }
@@ -172,7 +173,7 @@ func (l *RaftLog) LastIndex() uint64 {
 
 func (l *RaftLog) FirstIndex() uint64 {
 	if len(l.entries) == 0 {
-		return 0
+		return l.dummy
 	}
 	return l.entries[0].Index
 }

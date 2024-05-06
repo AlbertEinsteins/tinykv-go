@@ -543,18 +543,19 @@ func TestBasicConfChange3B(t *testing.T) {
 
 	cluster.MustTransferLeader(1, NewPeer(1, 1))
 
-	fmt.Println("123231")
 	cluster.MustRemovePeer(1, NewPeer(2, 2))
 	cluster.MustRemovePeer(1, NewPeer(3, 3))
 	cluster.MustRemovePeer(1, NewPeer(4, 4))
 	cluster.MustRemovePeer(1, NewPeer(5, 5))
 
 	// now region 1 only has peer: (1, 1)
+	fmt.Println("xxxx")
 	cluster.MustPut([]byte("k1"), []byte("v1"))
 	MustGetNone(cluster.engines[2], []byte("k1"))
 
 	// add peer (2, 2) to region 1
 	cluster.MustAddPeer(1, NewPeer(2, 2))
+	fmt.Println("123")
 	cluster.MustPut([]byte("k2"), []byte("v2"))
 	cluster.MustGet([]byte("k2"), []byte("v2"))
 	MustGetEqual(cluster.engines[2], []byte("k1"), []byte("v1"))
@@ -613,11 +614,17 @@ func TestConfChangeRemoveLeader3B(t *testing.T) {
 
 	// rejoin and become leader, now store 1 can see it
 	cluster.MustAddPeer(1, NewPeer(1, 1))
+	fmt.Println("xxxx 22")
+
 	cluster.MustTransferLeader(1, NewPeer(1, 1))
+
+	fmt.Println("xxxx 11 ")
+
 	cluster.MustPut([]byte("k1"), []byte("v1"))
 	MustGetEqual(cluster.engines[1], []byte("k0"), []byte("v0"))
 	MustGetEqual(cluster.engines[1], []byte("k1"), []byte("v1"))
 
+	fmt.Println("xxxx")
 	cluster.MustRemovePeer(1, NewPeer(2, 2))
 	cluster.MustRemovePeer(1, NewPeer(3, 3))
 	cluster.MustRemovePeer(1, NewPeer(4, 4))
@@ -706,6 +713,7 @@ func TestOneSplit3B(t *testing.T) {
 
 	req := NewRequest(left.GetId(), left.GetRegionEpoch(), []*raft_cmdpb.Request{NewGetCfCmd(engine_util.CfDefault, []byte("k2"))})
 	resp, _ := cluster.CallCommandOnLeader(&req, time.Second)
+	fmt.Println("key should not exist response", resp)
 	assert.NotNil(t, resp.GetHeader().GetError())
 	assert.NotNil(t, resp.GetHeader().GetError().GetKeyNotInRegion())
 

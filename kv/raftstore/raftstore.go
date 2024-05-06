@@ -126,9 +126,16 @@ func (bs *Raftstore) loadPeers() ([]*peer, error) {
 		defer it.Close()
 		for it.Seek(startKey); it.Valid(); it.Next() {
 			item := it.Item()
+
+			if len(item.Key()) != len(meta.RegionMetaMinKey)+8+1 {
+				continue
+			}
+
 			if bytes.Compare(item.Key(), endKey) >= 0 {
 				break
 			}
+
+			// fmt.Println(item.Key())
 			regionID, suffix, err := meta.DecodeRegionMetaKey(item.Key())
 			if err != nil {
 				return err
@@ -250,6 +257,8 @@ func (bs *Raftstore) start(
 		tickDriverSender:     bs.tickDriver.newRegionCh,
 	}
 	regionPeers, err := bs.loadPeers()
+
+	// fmt.Println("a ...any", err)
 	if err != nil {
 		return err
 	}

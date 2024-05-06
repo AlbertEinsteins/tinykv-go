@@ -78,6 +78,7 @@ func (n *Node) Start(ctx context.Context, engines *engine_util.Engines, trans Tr
 func (n *Node) checkStore(engines *engine_util.Engines) (uint64, error) {
 	ident := new(raft_serverpb.StoreIdent)
 	err := engine_util.GetMeta(engines.Kv, meta.StoreIdentKey, ident)
+
 	if err != nil {
 		if err == badger.ErrKeyNotFound {
 			return 0, nil

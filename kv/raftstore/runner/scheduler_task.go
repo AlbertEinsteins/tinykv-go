@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/Connor1996/badger"
 	"github.com/pingcap-incubator/tinykv/kv/raftstore/message"
@@ -87,6 +88,7 @@ func (r *SchedulerTaskHandler) onRegionHeartbeatResponse(resp *schedulerpb.Regio
 func (r *SchedulerTaskHandler) onAskSplit(t *SchedulerAskSplitTask) {
 	resp, err := r.SchedulerClient.AskSplit(context.TODO(), t.Region)
 	if err != nil {
+		fmt.Println("xxx ", err)
 		log.Error(err)
 		return
 	}
