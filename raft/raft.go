@@ -532,6 +532,11 @@ func (r *Raft) appendLocally(entries []pb.Entry) {
 }
 
 func (r *Raft) startElection() {
+
+	if r.RaftLog.pendingSnapshot != nil { // if applying snapshot, do nothing
+		return
+	}
+
 	r.becomeCandidate()
 	log.Infof("node-[%d] start to election in term {%d}", r.id, r.Term)
 

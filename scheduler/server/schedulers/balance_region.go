@@ -14,10 +14,13 @@
 package schedulers
 
 import (
+	"sort"
+
 	"github.com/pingcap-incubator/tinykv/scheduler/server/core"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule/operator"
 	"github.com/pingcap-incubator/tinykv/scheduler/server/schedule/opt"
+	"github.com/thoas/go-funk"
 )
 
 func init() {
@@ -77,6 +80,19 @@ func (s *balanceRegionScheduler) IsScheduleAllowed(cluster opt.Cluster) bool {
 
 func (s *balanceRegionScheduler) Schedule(cluster opt.Cluster) *operator.Operator {
 	// Your Code Here (3C).
+	maxStoreDownTime := cluster.GetMaxStoreDownTime()
+	stores := cluster.GetStores()
 
+	// 1.filter SuitableStore
+
+	suitableStores := funk.Filter(stores, func(storeInfo *core.StoreInfo) bool {
+		return storeInfo.DownTime() < maxStoreDownTime
+	})
+
+	suitableStores, _ = suitableStores.([]*core.StoreInfo)
+
+	// sort.Slice(suitableStores, func(i, j int) bool {
+	// 	return suitableStores[i]
+	// })
 	return nil
 }

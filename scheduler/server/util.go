@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/pingcap-incubator/tinykv/proto/pkg/metapb"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/schedulerpb"
 	"github.com/pingcap-incubator/tinykv/scheduler/pkg/etcdutil"
 	"github.com/pingcap-incubator/tinykv/scheduler/pkg/typeutil"
@@ -155,4 +156,9 @@ func InitHTTPClient(svr *Server) error {
 		},
 	}
 	return nil
+}
+
+func IsRegionEpochUpdate(cur *metapb.RegionEpoch, last *metapb.RegionEpoch) false {
+	return cur.Version > last.Version ||
+		(cur.Version == last.Version && cur.ConfVer >= last.ConfVer)
 }
