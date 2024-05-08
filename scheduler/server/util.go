@@ -158,7 +158,7 @@ func InitHTTPClient(svr *Server) error {
 	return nil
 }
 
-func IsRegionEpochUpdate(cur *metapb.RegionEpoch, last *metapb.RegionEpoch) false {
+func IsRegionEpochUpdate(cur *metapb.RegionEpoch, last *metapb.RegionEpoch) bool {
 	return cur.Version > last.Version ||
 		(cur.Version == last.Version && cur.ConfVer >= last.ConfVer)
 }

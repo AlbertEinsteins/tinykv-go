@@ -361,7 +361,7 @@ func (ps *PeerStorage) ApplySnapshot(snapshot *eraftpb.Snapshot, kvWB *engine_ut
 
 	if ps.isInitialized() {
 		if !util.RegionEqual(region, snapRegion) {
-			log.Panicf("ps-[%s] receive a snapshot differ from current region", ps.Tag)
+			log.Errorf("ps-[%s] receive a snapshot differ from current region", ps.Tag)
 			return nil, nil
 		}
 		ps.clearMeta(kvWB, raftWB)

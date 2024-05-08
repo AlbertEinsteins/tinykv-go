@@ -280,16 +280,21 @@ func (c *RaftCluster) handleStoreHeartbeat(stats *schedulerpb.StoreStats) error 
 func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 	// Your Code Here (3C).
 	hearbeatEpoch := region.GetRegionEpoch()
-	localRegionInfo := c.core.SearchRegion(region.GetStartKey())
+	if hearbeatEpoch == nil {
+		return errors.Errorf("region {%d} has no epoch", region.GetID())
+	}
+
+	localRegionInfo := c.GetRegion(region.GetID())
 	if localRegionInfo != nil {
 		// check region update
-		if !IsRegionEpochUpdate(hearbeatEpoch, localRegionInfo.GetRegionEpoch()) {
+		if hearbeatEpoch.Version < localRegionInfo.GetRegionEpoch().Version ||
+			hearbeatEpoch.ConfVer < localRegionInfo.GetRegionEpoch().ConfVer {
 			log.Info(fmt.Sprintf("old region epoch %v, cur region epoch %v",
 				localRegionInfo.GetRegionEpoch(), region.GetRegionEpoch()))
 			return errors.Errorf("regionInfo in hearbeat is not update")
 		}
 	} else {
-		regionInfos := c.core.GetOverlaps(region)
+		regionInfos := c.ScanRegions(region.GetStartKey(), region.GetEndKey(), -1)
 
 		for _, overlapRegion := range regionInfos {
 			regionEpoch := overlapRegion.GetRegionEpoch()
@@ -300,7 +305,7 @@ func (c *RaftCluster) processRegionHeartbeat(region *core.RegionInfo) error {
 	}
 
 	c.putRegion(region)
-	for storeId, _ := range region.GetStoreIds() {
+	for storeId := range region.GetStoreIds() {
 		c.updateStoreStatusLocked(storeId)
 	}
 	return nil
