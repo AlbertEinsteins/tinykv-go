@@ -5,6 +5,7 @@ import (
 
 	"github.com/pingcap-incubator/tinykv/kv/storage"
 	"github.com/pingcap-incubator/tinykv/kv/util/codec"
+	"github.com/pingcap-incubator/tinykv/kv/util/engine_util"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
 	"github.com/pingcap-incubator/tinykv/scheduler/pkg/tsoutil"
 )
@@ -47,7 +48,13 @@ func (txn *MvccTxn) PutWrite(key []byte, ts uint64, write *Write) {
 // if an error occurs during lookup.
 func (txn *MvccTxn) GetLock(key []byte) (*Lock, error) {
 	// Your Code Here (4A).
-	return nil, nil
+	reader := txn.Reader
+
+	val, err := reader.GetCF(engine_util.CfLock, key)
+	if err != nil {
+		return nil, err
+	}
+
 }
 
 // PutLock adds a key/lock to this transaction.
