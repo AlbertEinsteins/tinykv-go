@@ -3,7 +3,6 @@ package mvcc
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 
 	"github.com/pingcap-incubator/tinykv/kv/storage"
 	"github.com/pingcap-incubator/tinykv/kv/util/codec"
@@ -105,32 +104,35 @@ func (txn *MvccTxn) DeleteLock(key []byte) {
 func (txn *MvccTxn) GetValue(key []byte) ([]byte, error) {
 	// Your Code Here (4A).
 
-	// 1.get all value with provided key
-	iter := txn.Reader.IterCF(engine_util.CfDefault)
-	defer iter.Close()
-	var res []byte
+	// 1.get all commited entry with provided key
+	writes, commitedTss := totalWriteWithCommitTsByKey(txn.Reader, key)
 
-	for iter.Seek(key); iter.Valid(); iter.Next() {
-		item := iter.Item()
-		userKey := DecodeUserKey(item.Key())
-		if !bytes.Equal(userKey, key) {
+	var readTsAfterRecentCommited uint64
+	for idx, commitedTs := range commitedTss {
+		if commitedTs <= txn.StartTS {
+			if writes[idx].Kind == WriteKindDelete { // deleted already
+				return nil, nil
+			}
+
+			readTsAfterRecentCommited = writes[idx].StartTS
 			break
 		}
-
-		readTs := decodeTimestamp(item.Key())
-		if readTs > txn.StartTS {
-			continue
-		}
-
-		val, err := item.Value()
-		if err != nil {
-			return nil, err
-		}
-
-		res = val
 	}
 
-	return res, nil
+	if readTsAfterRecentCommited == 0 {
+		return nil, nil
+	}
+
+	// 2.get from default data
+	iter := txn.Reader.IterCF(engine_util.CfDefault)
+	defer iter.Close()
+
+	iter.Seek(EncodeKey(key, readTsAfterRecentCommited))
+	if !iter.Valid() {
+		return nil, nil
+	}
+
+	return iter.Item().Value()
 }
 
 // PutValue adds a key/value write to this transaction.
@@ -164,39 +166,24 @@ func (txn *MvccTxn) DeleteValue(key []byte) {
 // write's commit timestamp, or an error.
 func (txn *MvccTxn) CurrentWrite(key []byte) (*Write, uint64, error) {
 	// Your Code Here (4A).
-	iter := txn.Reader.IterCF(engine_util.CfWrite)
-	defer iter.Close()
-
 	commitedTs := uint64(0)
 	var currentWrite *Write
 
-	for iter.Seek(key); iter.Valid(); iter.Next() {
-		item := iter.Item()
-		userKey := DecodeUserKey(item.Key())
+	totalWrites, commitedTsList := totalWriteWithCommitTsByKey(txn.Reader, key)
+	if len(totalWrites) != len(commitedTsList) {
+		panic("The len of read Writes and CommitTsList must equal")
+	}
 
-		fmt.Println(key, item.Key(), userKey, decodeTimestamp(item.Key()))
-		if !bytes.Equal(userKey, key) {
-			break
-		}
-
-		val, err := item.Value()
-		if err != nil {
-			return nil, commitedTs, err
-		}
-
-		write, err := ParseWrite(val)
-		if err != nil {
-			return nil, commitedTs, err
-		}
-
+	for idx, write := range totalWrites {
 		if write.StartTS == txn.StartTS {
-			currentWrite = write
-			commitedTs = decodeTimestamp(item.Key())
+			currentWrite = &Write{
+				StartTS: write.StartTS,
+				Kind:    write.Kind,
+			}
+			commitedTs = commitedTsList[idx]
 			break
 		}
 	}
-
-	fmt.Println("============ end ============")
 	return currentWrite, commitedTs, nil
 }
 
@@ -219,7 +206,7 @@ func (txn *MvccTxn) MostRecentWrite(key []byte) (*Write, uint64, error) {
 	item := iter.Item()
 	userKey := DecodeUserKey(item.Key())
 
-	fmt.Println(key, item.Key(), userKey, decodeTimestamp(item.Key()))
+	// fmt.Println(key, item.Key(), userKey, decodeTimestamp(item.Key()))
 	if !bytes.Equal(userKey, key) {
 		return currentWrite, commitedTs, nil
 	}
@@ -237,7 +224,6 @@ func (txn *MvccTxn) MostRecentWrite(key []byte) (*Write, uint64, error) {
 	currentWrite = write
 	commitedTs = decodeTimestamp(item.Key())
 
-	fmt.Println("============ end ============")
 	return currentWrite, commitedTs, nil
 }
 
@@ -272,4 +258,33 @@ func decodeTimestamp(key []byte) uint64 {
 // PhysicalTime returns the physical time part of the timestamp.
 func PhysicalTime(ts uint64) uint64 {
 	return ts >> tsoutil.PhysicalShiftBits
+}
+
+func totalWriteWithCommitTsByKey(reader storage.StorageReader, key []byte) ([]*Write, []uint64) {
+	iter := reader.IterCF(engine_util.CfWrite)
+	defer iter.Close()
+
+	writes := []*Write{}
+	commitedTs := []uint64{}
+	for iter.Seek(key); iter.Valid(); iter.Next() {
+		item := iter.Item()
+		userKey := DecodeUserKey(item.Key())
+
+		if !bytes.Equal(userKey, key) {
+			break
+		}
+		val, err := item.Value()
+		if err != nil {
+			panic(err)
+		}
+
+		write, err := ParseWrite(val)
+		if err != nil {
+			panic(err)
+		}
+
+		writes = append(writes, write)
+		commitedTs = append(commitedTs, decodeTimestamp(item.Key()))
+	}
+	return writes, commitedTs
 }
