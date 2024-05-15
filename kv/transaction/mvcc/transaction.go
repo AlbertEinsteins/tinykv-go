@@ -104,7 +104,7 @@ func (txn *MvccTxn) DeleteLock(key []byte) {
 func (txn *MvccTxn) GetValue(key []byte) ([]byte, error) {
 	// Your Code Here (4A).
 
-	// 1.get all commited entry with provided key
+	// 1.get all commited entry order by commit ts desending with provided key
 	writes, commitedTss := totalWriteWithCommitTsByKey(txn.Reader, key)
 
 	var readTsAfterRecentCommited uint64

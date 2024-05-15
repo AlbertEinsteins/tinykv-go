@@ -206,12 +206,15 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 			return nil, err
 		}
 
+		// lock is nil means the prewirte is late after lock.Ts
+		// or lock.Ts != req.StartVersion iif when the former lock
+		//		is rolled back by another txn
 		if lock == nil || lock.Ts != req.StartVersion {
-			if lock != nil {
-				resp.Error = &kvrpcpb.KeyError{
-					Retryable: "true",
-				}
+			// if lock != nil {
+			resp.Error = &kvrpcpb.KeyError{
+				Retryable: "true",
 			}
+			// }
 
 			return &resp, nil
 		}
@@ -235,6 +238,45 @@ func (server *Server) KvCommit(_ context.Context, req *kvrpcpb.CommitRequest) (*
 
 func (server *Server) KvScan(_ context.Context, req *kvrpcpb.ScanRequest) (*kvrpcpb.ScanResponse, error) {
 	// Your Code Here (4C).
+	reader, err := server.storage.Reader(req.Context)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	txn := mvcc.NewMvccTxn(reader, req.Version)
+	scanner := mvcc.NewScanner(req.StartKey, txn)
+	defer scanner.Close()
+
+	size := req.Limit
+	var resp kvrpcpb.ScanResponse
+	kvParis := []kvrpcpb.KvPair{}
+
+	for size >= 0 {
+		key, val, err := scanner.Next()
+		if err != nil {
+			return &resp, err
+		}
+
+		if key == nil {
+			break
+		}
+
+		// get lock with key, check if in write state
+		lock, err := txn.GetLock(key)
+		if err != nil {
+			return &resp, err
+		}
+
+		if lock != nil && lock.Ts <= txn.StartTS {
+			resp.Pairs = append(resp.Pairs, &kvrpcpb.KvPair{
+				Error: &kvrpcpb.KeyError{
+					Locked: &kvrpcpb.LockInfo{},
+				},
+			})
+
+		}
+	}
 	return nil, nil
 }
 
