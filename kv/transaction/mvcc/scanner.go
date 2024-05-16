@@ -48,7 +48,8 @@ func (scan *Scanner) Next() ([]byte, []byte, error) {
 	key := item.KeyCopy(nil)
 	userKey := DecodeUserKey(key)
 
-	if !bytes.Equal(userKey, key) {
+	if !bytes.Equal(userKey, scan.key) {
+		scan.key = userKey
 		return scan.Next()
 	}
 
@@ -57,15 +58,15 @@ func (scan *Scanner) Next() ([]byte, []byte, error) {
 		tempItem := iter.Item()
 		userK := DecodeUserKey(tempItem.Key())
 
-		if !bytes.Equal(userK, scan.key) {
+		if !bytes.Equal(userK, key) {
 			scan.key = userK
 			break
 		}
 	}
 
-	if !iter.Valid() {
-		return nil, nil, nil
-	}
+	// if !iter.Valid() {
+	// 	return nil, nil, nil
+	// }
 
 	val, err := item.ValueCopy(nil)
 	if err != nil {
@@ -76,9 +77,9 @@ func (scan *Scanner) Next() ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 
-	data, err := scan.txn.Reader.GetCF(engine_util.CfDefault, EncodeKey(item.Key(), write.StartTS))
+	data, err := scan.txn.Reader.GetCF(engine_util.CfDefault, EncodeKey(userKey, write.StartTS))
 	if err != nil {
 		return nil, nil, err
 	}
-	return key, data, nil
+	return userKey, data, nil
 }

@@ -104,6 +104,7 @@ func (s *MemStorage) HasChanged(cf string, key []byte) bool {
 	switch cf {
 	case engine_util.CfDefault:
 		result = s.CfDefault.Get(item)
+		fmt.Println(key, result)
 	case engine_util.CfLock:
 		result = s.CfLock.Get(item)
 	case engine_util.CfWrite:
