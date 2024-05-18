@@ -450,9 +450,10 @@ func (server *Server) KvResolveLock(_ context.Context, req *kvrpcpb.ResolveLockR
 
 	if req.CommitVersion != 0 {
 		commitReq := kvrpcpb.CommitRequest{
-			Context:      req.Context,
-			StartVersion: req.StartVersion,
-			Keys:         keys,
+			Context:       req.Context,
+			StartVersion:  req.StartVersion,
+			CommitVersion: req.CommitVersion,
+			Keys:          keys,
 		}
 
 		rtnResp, err := server.KvCommit(context.TODO(), &commitReq)

@@ -13,6 +13,7 @@ type Scanner struct {
 	// Your Data Here (4C).
 	txn  *MvccTxn
 	key  []byte
+	done bool
 	iter engine_util.DBIterator
 }
 
@@ -29,22 +30,23 @@ func NewScanner(startKey []byte, txn *MvccTxn) *Scanner {
 func (scan *Scanner) Close() {
 	// Your Code Here (4C).
 	scan.iter.Close()
+	scan.done = true
 }
 
 // Next returns the next key/value pair from the scanner. If the scanner is exhausted, then it will return `nil, nil, nil`.
 func (scan *Scanner) Next() ([]byte, []byte, error) {
 	// Your Code Here (4C).
-	iter := scan.iter
-	if !iter.Valid() {
+	if scan.done {
 		return nil, nil, nil
 	}
 
-	iter.Seek(EncodeKey(scan.key, scan.txn.StartTS))
-	if !iter.Valid() {
+	scan.iter.Seek(EncodeKey(scan.key, scan.txn.StartTS))
+	if !scan.iter.Valid() {
+		scan.done = true
 		return nil, nil, nil
 	}
 
-	item := iter.Item()
+	item := scan.iter.Item()
 	key := item.KeyCopy(nil)
 	userKey := DecodeUserKey(key)
 
@@ -54,32 +56,34 @@ func (scan *Scanner) Next() ([]byte, []byte, error) {
 	}
 
 	// jump other same key
-	for iter.Next(); iter.Valid(); iter.Next() {
-		tempItem := iter.Item()
+	for scan.iter.Next(); scan.iter.Valid(); scan.iter.Next() {
+		tempItem := scan.iter.Item()
 		userK := DecodeUserKey(tempItem.Key())
 
-		if !bytes.Equal(userK, key) {
+		if !bytes.Equal(userK, scan.key) {
 			scan.key = userK
 			break
 		}
 	}
 
-	// if !iter.Valid() {
-	// 	return nil, nil, nil
-	// }
+	if !scan.iter.Valid() {
+		scan.done = true
+	}
 
 	val, err := item.ValueCopy(nil)
 	if err != nil {
-		return nil, nil, err
+		return userKey, nil, err
 	}
 	write, err := ParseWrite(val)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	data, err := scan.txn.Reader.GetCF(engine_util.CfDefault, EncodeKey(userKey, write.StartTS))
-	if err != nil {
-		return nil, nil, err
+	if write.Kind == WriteKindDelete {
+		return userKey, nil, nil
 	}
-	return userKey, data, nil
+
+	data, err := scan.txn.Reader.GetCF(engine_util.CfDefault,
+		EncodeKey(userKey, write.StartTS))
+	return userKey, data, err
 }
